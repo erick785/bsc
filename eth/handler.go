@@ -20,6 +20,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -781,43 +782,48 @@ func (h *handler) Stop() {
 func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	// Disable the block propagation if the chain has already entered the PoS
 	// stage. The block propagation is delegated to the consensus layer.
+	//log.Info("22222==========Propagating", "propagate", propagate, "block", block.Number(), "hash", block.Hash())
 	if h.merger.PoSFinalized() {
 		return
 	}
 	// Disable the block propagation if it's the post-merge block.
-	if beacon, ok := h.chain.Engine().(*beacon.Beacon); ok {
-		if beacon.IsPoSHeader(block.Header()) {
-			return
-		}
-	}
+	// if beacon, ok := h.chain.Engine().(*beacon.Beacon); ok {
+	// 	if beacon.IsPoSHeader(block.Header()) {
+	// 		return
+	// 	}
+	// }
 	hash := block.Hash()
 	peers := h.peers.peersWithoutBlock(hash)
 
 	// If propagation is requested, send to a subset of the peer
-	if propagate {
-		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
-		var td *big.Int
-		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
-			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
-		} else {
-			log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
-			return
-		}
-		// Send the block to a subset of our peers
-		var transfer []*ethPeer
-		if h.directBroadcast {
-			transfer = peers[:]
-		} else {
-			transfer = peers[:int(math.Sqrt(float64(len(peers))))]
-		}
-
-		for _, peer := range transfer {
-			peer.AsyncSendNewBlock(block, td)
-		}
-
-		log.Trace("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+	//if propagate {
+	// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
+	var td *big.Int
+	if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
+		td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
+	} else {
+		log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
 		return
 	}
+	// Send the block to a subset of our peers
+	var transfer []*ethPeer
+	//if h.directBroadcast {
+	transfer = peers[:]
+	// } else {
+	// 	transfer = peers[:int(math.Sqrt(float64(len(peers))))]
+	// }
+
+	for k, peer := range transfer {
+		n := string(block.Extra()[:2])
+		if strings.TrimLeft(n, "0") == strconv.Itoa(k) {
+			log.Info("================Propagating block", "hash", hash, "number", block.Number(), "recipients", len(transfer), "extra", string(block.Extra()[:2]), "peer", peer.ID())
+			peer.AsyncSendNewBlock(block, td)
+		}
+	}
+
+	//log.Info("============PPropagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
+	return
+	//}
 	// Otherwise if the block is indeed in our own chain, announce it
 	if h.chain.HasBlock(hash, block.NumberU64()) {
 		for _, peer := range peers {
@@ -940,8 +946,8 @@ func (h *handler) minedBroadcastLoop() {
 				continue
 			}
 			if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
-				h.BroadcastBlock(ev.Block, true)  // First propagate block to peers
-				h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
+				h.BroadcastBlock(ev.Block, true) // First propagate block to peers
+				//	h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
 			}
 		case <-h.stopCh:
 			return

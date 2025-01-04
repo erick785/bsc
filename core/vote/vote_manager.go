@@ -127,6 +127,7 @@ func (voteManager *VoteManager) loop() {
 				startVote = true
 			}
 		case cHead := <-voteManager.highestVerifiedBlockCh:
+			continue
 			if !startVote {
 				log.Debug("startVote flag is false, continue")
 				continue

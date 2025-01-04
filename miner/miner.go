@@ -20,6 +20,7 @@ package miner
 import (
 	"fmt"
 	"math/big"
+	"strconv"
 	"sync"
 	"time"
 
@@ -35,6 +36,8 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
+
+const workerNum = 20
 
 // Backend wraps all methods required for mining. Only full node is capable
 // to offer all the functions here.
@@ -76,6 +79,127 @@ var DefaultConfig = Config{
 	Mev: DefaultMevConfig,
 }
 
+type workerSet struct {
+	workers []*worker
+}
+
+func newWorkerSet(config *Config, chainConfig *params.ChainConfig, engine consensus.Engine, eth Backend, mux *event.TypeMux, isLocalBlock func(header *types.Header) bool, init bool) *workerSet {
+	// 15ge
+	workers := make([]*worker, workerNum)
+	for i := 0; i < workerNum; i++ {
+		w := newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, false)
+		workers[i] = w
+	}
+
+	return &workerSet{
+		workers: workers,
+	}
+}
+
+func (ws *workerSet) start() {
+	for _, w := range ws.workers {
+		w.start()
+	}
+}
+
+func (ws *workerSet) stop() {
+	for _, w := range ws.workers {
+		w.stop()
+	}
+}
+
+func (ws *workerSet) close() {
+	for _, w := range ws.workers {
+		w.close()
+	}
+}
+
+func (ws *workerSet) isRunning() bool {
+	for _, w := range ws.workers {
+		if w.isRunning() {
+			return true
+		}
+	}
+	return false
+}
+
+func (ws *workerSet) inTurn() bool {
+	for _, w := range ws.workers {
+		if w.inTurn() {
+			return true
+		}
+	}
+	return false
+}
+
+func (ws *workerSet) setEtherbase(addr common.Address) {
+	for _, w := range ws.workers {
+		w.setEtherbase(addr)
+	}
+}
+
+func (ws *workerSet) setExtra(extra []byte) {
+	// todo
+	for k, w := range ws.workers {
+		if k < 10 {
+			w.setExtra([]byte("0" + strconv.Itoa(k)))
+		} else {
+			w.setExtra([]byte(strconv.Itoa(k)))
+
+		}
+
+	}
+}
+
+func (ws *workerSet) storeSyncing(syncing bool) {
+	for _, w := range ws.workers {
+		w.syncing.Store(syncing)
+	}
+}
+
+// setBestBidFetcher
+func (ws *workerSet) setBestBidFetcher(fetcher *bidSimulatorSet) {
+	for k, w := range ws.workers {
+		fmt.Println("===setBestBidFetcher", "k", k, "w", w)
+		fmt.Println("==1=setBestBidFetcher", "k", k, "fetcher.bidSimulators[k]", fetcher.bidSimulators[k])
+		w.setBestBidFetcher(fetcher.bidSimulators[k])
+	}
+}
+
+type bidSimulatorSet struct {
+	bidSimulators []*bidSimulator
+}
+
+func newBidSimulatorSet(config *MevConfig, delayLeftOver time.Duration, gasPrice *big.Int, eth Backend, chainConfig *params.ChainConfig, engine consensus.Engine, workerSet *workerSet) *bidSimulatorSet {
+	bidSimulators := make([]*bidSimulator, workerNum)
+	for i := 0; i < workerNum; i++ {
+		b := newBidSimulator(config, delayLeftOver, gasPrice, eth, chainConfig, engine, workerSet.workers[i])
+		bidSimulators[i] = b
+
+	}
+	return &bidSimulatorSet{
+		bidSimulators: bidSimulators,
+	}
+}
+
+func (bs *bidSimulatorSet) start() {
+	for _, b := range bs.bidSimulators {
+		b.start()
+	}
+}
+
+func (bs *bidSimulatorSet) stop() {
+	for _, b := range bs.bidSimulators {
+		b.stop()
+	}
+}
+
+func (bs *bidSimulatorSet) close() {
+	for _, b := range bs.bidSimulators {
+		b.close()
+	}
+}
+
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
 	mux     *event.TypeMux
@@ -84,9 +208,9 @@ type Miner struct {
 	exitCh  chan struct{}
 	startCh chan struct{}
 	stopCh  chan struct{}
-	worker  *worker
+	worker  *workerSet
 
-	bidSimulator *bidSimulator
+	bidSimulator *bidSimulatorSet
 
 	wg sync.WaitGroup
 }
@@ -99,10 +223,11 @@ func New(eth Backend, config *Config, chainConfig *params.ChainConfig, mux *even
 		exitCh:  make(chan struct{}),
 		startCh: make(chan struct{}),
 		stopCh:  make(chan struct{}),
-		worker:  newWorker(config, chainConfig, engine, eth, mux, isLocalBlock, false),
+		worker:  newWorkerSet(config, chainConfig, engine, eth, mux, isLocalBlock, false),
 	}
 
-	miner.bidSimulator = newBidSimulator(&config.Mev, config.DelayLeftOver, config.GasPrice, eth, chainConfig, engine, miner.worker)
+	miner.bidSimulator = newBidSimulatorSet(&config.Mev, config.DelayLeftOver, config.GasPrice, eth, chainConfig, engine, miner.worker)
+
 	miner.worker.setBestBidFetcher(miner.bidSimulator)
 
 	miner.wg.Add(1)
@@ -146,7 +271,7 @@ func (miner *Miner) update() {
 					shouldStart = true
 					log.Info("Mining aborted due to sync")
 				}
-				miner.worker.syncing.Store(true)
+				miner.worker.storeSyncing(true)
 
 			case downloader.FailedEvent:
 				canStart = true
@@ -154,7 +279,7 @@ func (miner *Miner) update() {
 					miner.worker.start()
 					miner.bidSimulator.start()
 				}
-				miner.worker.syncing.Store(false)
+				miner.worker.storeSyncing(false)
 
 			case downloader.DoneEvent:
 				canStart = true
@@ -162,7 +287,7 @@ func (miner *Miner) update() {
 					miner.worker.start()
 					miner.bidSimulator.start()
 				}
-				miner.worker.syncing.Store(false)
+				miner.worker.storeSyncing(false)
 
 				// Stop reacting to downloader events
 				events.Unsubscribe()
@@ -214,42 +339,43 @@ func (miner *Miner) Hashrate() uint64 {
 }
 
 func (miner *Miner) SetExtra(extra []byte) error {
-	if uint64(len(extra)) > params.MaximumExtraDataSize {
-		return fmt.Errorf("extra exceeds max length. %d > %v", len(extra), params.MaximumExtraDataSize)
-	}
+	// if uint64(len(extra)) > params.MaximumExtraDataSize {
+	// 	return fmt.Errorf("extra exceeds max length. %d > %v", len(extra), params.MaximumExtraDataSize)
+	// }
 	miner.worker.setExtra(extra)
 	return nil
 }
 
 func (miner *Miner) SetGasTip(tip *big.Int) error {
-	miner.worker.setGasTip(tip)
+	//	miner.worker.setGasTip(tip)
 	return nil
 }
 
 // SetRecommitInterval sets the interval for sealing work resubmitting.
 func (miner *Miner) SetRecommitInterval(interval time.Duration) {
-	miner.worker.setRecommitInterval(interval)
+	//miner.worker.setRecommitInterval(interval)
 }
 
 // Pending returns the currently pending block and associated state. The returned
 // values can be nil in case the pending block is not initialized
 func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
-	if miner.worker.isRunning() {
-		pendingBlock, pendingState := miner.worker.pending()
-		if pendingState != nil && pendingBlock != nil {
-			return pendingBlock, pendingState
-		}
-	}
-	// fallback to latest block
-	block := miner.worker.chain.CurrentBlock()
-	if block == nil {
-		return nil, nil
-	}
-	stateDb, err := miner.worker.chain.StateAt(block.Root)
-	if err != nil {
-		return nil, nil
-	}
-	return miner.worker.chain.GetBlockByHash(block.Hash()), stateDb
+	// if miner.worker.isRunning() {
+	// 	pendingBlock, pendingState := miner.worker.pending()
+	// 	if pendingState != nil && pendingBlock != nil {
+	// 		return pendingBlock, pendingState
+	// 	}
+	// }
+	// // fallback to latest block
+	// block := miner.worker.chain.CurrentBlock()
+	// if block == nil {
+	// 	return nil, nil
+	// }
+	// stateDb, err := miner.worker.chain.StateAt(block.Root)
+	// if err != nil {
+	// 	return nil, nil
+	// }
+	// return miner.worker.chain.GetBlockByHash(block.Hash()), stateDb
+	return nil, nil
 }
 
 // PendingBlock returns the currently pending block. The returned block can be
@@ -259,20 +385,22 @@ func (miner *Miner) Pending() (*types.Block, *state.StateDB) {
 // simultaneously, please use Pending(), as the pending state can
 // change between multiple method calls
 func (miner *Miner) PendingBlock() *types.Block {
-	if miner.worker.isRunning() {
-		pendingBlock := miner.worker.pendingBlock()
-		if pendingBlock != nil {
-			return pendingBlock
-		}
-	}
-	// fallback to latest block
-	return miner.worker.chain.GetBlockByHash(miner.worker.chain.CurrentBlock().Hash())
+	// if miner.worker.isRunning() {
+	// 	pendingBlock := miner.worker.pendingBlock()
+	// 	if pendingBlock != nil {
+	// 		return pendingBlock
+	// 	}
+	// }
+	// // fallback to latest block
+	// return miner.worker.chain.GetBlockByHash(miner.worker.chain.CurrentBlock().Hash())
+	return nil
 }
 
 // PendingBlockAndReceipts returns the currently pending block and corresponding receipts.
 // The returned values can be nil in case the pending block is not initialized.
 func (miner *Miner) PendingBlockAndReceipts() (*types.Block, types.Receipts) {
-	return miner.worker.pendingBlockAndReceipts()
+	//return miner.worker.pendingBlockAndReceipts()
+	return nil, nil
 }
 
 func (miner *Miner) SetEtherbase(addr common.Address) {
@@ -282,20 +410,22 @@ func (miner *Miner) SetEtherbase(addr common.Address) {
 // SetGasCeil sets the gaslimit to strive for when mining blocks post 1559.
 // For pre-1559 blocks, it sets the ceiling.
 func (miner *Miner) SetGasCeil(ceil uint64) {
-	miner.worker.setGasCeil(ceil)
+	//miner.worker.setGasCeil(ceil)
 }
 
 // SubscribePendingLogs starts delivering logs from pending transactions
 // to the given channel.
 func (miner *Miner) SubscribePendingLogs(ch chan<- []*types.Log) event.Subscription {
-	return miner.worker.pendingLogsFeed.Subscribe(ch)
+	return miner.worker.workers[0].pendingLogsFeed.Subscribe(ch)
+
 }
 
 // BuildPayload builds the payload according to the provided parameters.
 func (miner *Miner) BuildPayload(args *BuildPayloadArgs) (*Payload, error) {
-	return miner.worker.buildPayload(args)
+	return miner.worker.workers[0].buildPayload(args)
 }
 
 func (miner *Miner) GasCeil() uint64 {
-	return miner.worker.getGasCeil()
+	//return miner.worker.getGasCeil()
+	return 0
 }

@@ -680,10 +680,10 @@ func (w *worker) resultLoop() {
 				} else {
 					log.Info("Written block as SideChain and avoid broadcasting", "status", status)
 				}
-				continue
+				//continue
 			}
 			writeBlockTimer.UpdateSince(start)
-			log.Info("Successfully sealed new block", "number", block.Number(), "sealhash", sealhash, "hash", hash,
+			log.Info("Successfully sealed new block", "sucess", status == core.CanonStatTy, "number", block.Number(), "sealhash", sealhash, "hash", hash,
 				"elapsed", common.PrettyDuration(time.Since(task.createdAt)))
 			w.mux.Post(core.NewMinedBlockEvent{Block: block})
 

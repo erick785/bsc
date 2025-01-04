@@ -53,9 +53,9 @@ const (
 	inMemorySignatures = 4096  // Number of recent block signatures to keep in memory
 	inMemoryHeaders    = 86400 // Number of recent headers to keep in memory for double sign detection,
 
-	checkpointInterval = 1024        // Number of blocks after which to save the snapshot to the database
-	defaultEpochLength = uint64(200) // Default number of blocks of checkpoint to update validatorSet from contract
-	defaultTurnLength  = uint8(1)    // Default consecutive number of blocks a validator receives priority for block production
+	checkpointInterval = 1024       // Number of blocks after which to save the snapshot to the database
+	defaultEpochLength = uint64(20) // Default number of blocks of checkpoint to update validatorSet from contract
+	defaultTurnLength  = uint8(1)   // Default consecutive number of blocks a validator receives priority for block production
 
 	extraVanity      = 32 // Fixed number of extra-data prefix bytes reserved for signer vanity
 	extraSeal        = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
@@ -268,6 +268,7 @@ func New(
 	if parliaConfig != nil && parliaConfig.Epoch == 0 {
 		parliaConfig.Epoch = defaultEpochLength
 	}
+	parliaConfig.Epoch = defaultEpochLength
 
 	// Allocate the snapshot caches and create the engine
 	recentSnaps, err := lru.NewARC(inMemorySnapshots)
@@ -967,7 +968,14 @@ func (p *Parlia) assembleVoteAttestation(chain consensus.ChainHeaderReader, head
 		return nil
 	}
 
+	return nil
+	if header.Difficulty.Int64() == 2 {
+		log.Info("=====assembleVoteAttestation, difficulty is 2, skip", "header", header.Number)
+		return nil
+	}
+
 	if p.VotePool == nil {
+		log.Warn("=====assembleVoteAttestation, vote pool is nil", "header", header.Number)
 		return nil
 	}
 
@@ -1230,6 +1238,8 @@ func (p *Parlia) distributeFinalityReward(chain consensus.ChainHeaderReader, sta
 	}
 	sort.Sort(validatorsAscending(validators))
 	for _, val := range validators {
+		log.Info("================distributeFinalityReward", "numner", header.Number, "validator", val, "weight", accumulatedWeights[val])
+		fmt.Println("================distributeFinalityReward", "numner", header.Number, "validator", val, "weight", accumulatedWeights[val])
 		weights = append(weights, big.NewInt(int64(accumulatedWeights[val])))
 	}
 
@@ -1527,6 +1537,7 @@ func (p *Parlia) Delay(chain consensus.ChainReader, header *types.Header, leftOv
 		return nil
 	}
 	delay := p.delayForRamanujanFork(snap, header)
+	log.Info("====Delay1", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", p.val.Hex())
 
 	if *leftOver >= time.Duration(p.config.Period)*time.Second {
 		// ignore invalid leftOver
@@ -1542,10 +1553,12 @@ func (p *Parlia) Delay(chain consensus.ChainReader, header *types.Header, leftOv
 	timeForMining := time.Duration(p.config.Period) * time.Second / 2
 	if !snap.lastBlockInOneTurn(header.Number.Uint64()) {
 		timeForMining = time.Duration(p.config.Period) * time.Second * 2 / 3
+		log.Info("====Delay2", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", p.val.Hex(), "timeForMining", timeForMining)
 	}
 	if delay > timeForMining {
 		delay = timeForMining
 	}
+	log.Info("====Delay3", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", p.val.Hex(), "timeForMining", timeForMining)
 	return &delay
 }
 
@@ -1580,8 +1593,9 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	}
 
 	// If we're amongst the recent signers, wait for the next block
+	//
 	if snap.SignRecently(val) {
-		log.Info("Signed recently, must wait for others")
+		log.Info("====Signed recently, must wait for others")
 		return nil
 	}
 
@@ -2111,6 +2125,9 @@ func (p *Parlia) backOffTime(snap *Snapshot, header *types.Header, val common.Ad
 		})
 
 		delay += backOffSteps[idx] * wiggleTime
+
+		// log.Debug("=====attack  backOffTime", "delay", delay, "blockNumber", header.Number, "no turn validator", val)
+		//return 0
 		return delay
 	}
 }

@@ -2,7 +2,6 @@ package miner
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"time"
 
@@ -37,93 +36,100 @@ var DefaultMevConfig = MevConfig{
 
 // MevRunning return true if mev is running.
 func (miner *Miner) MevRunning() bool {
-	return miner.bidSimulator.isRunning() && miner.bidSimulator.receivingBid()
+	return false
+	//return miner.bidSimulator.isRunning() && miner.bidSimulator.receivingBid()
 }
 
 // StartMev starts mev.
 func (miner *Miner) StartMev() {
-	miner.bidSimulator.startReceivingBid()
+	//miner.bidSimulator.startReceivingBid()
 }
 
 // StopMev stops mev.
 func (miner *Miner) StopMev() {
-	miner.bidSimulator.stopReceivingBid()
+	//miner.bidSimulator.stopReceivingBid()
 }
 
 // AddBuilder adds a builder to the bid simulator.
 func (miner *Miner) AddBuilder(builder common.Address, url string) error {
-	return miner.bidSimulator.AddBuilder(builder, url)
+	//return miner.bidSimulator.AddBuilder(builder, url)
+	return nil
 }
 
 // RemoveBuilder removes a builder from the bid simulator.
 func (miner *Miner) RemoveBuilder(builderAddr common.Address) error {
-	return miner.bidSimulator.RemoveBuilder(builderAddr)
+	//return miner.bidSimulator.RemoveBuilder(builderAddr)
+	return nil
+
 }
 
 // HasBuilder returns true if the builder is in the builder list.
 func (miner *Miner) HasBuilder(builder common.Address) bool {
-	return miner.bidSimulator.ExistBuilder(builder)
+	//return miner.bidSimulator.ExistBuilder(builder)
+	return false
 }
 
 func (miner *Miner) SendBid(ctx context.Context, bidArgs *types.BidArgs) (common.Hash, error) {
-	builder, err := bidArgs.EcrecoverSender()
-	if err != nil {
-		return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
-	}
+	// builder, err := bidArgs.EcrecoverSender()
+	// if err != nil {
+	// 	return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("invalid signature:%v", err))
+	// }
 
-	if !miner.bidSimulator.ExistBuilder(builder) {
-		return common.Hash{}, types.NewInvalidBidError("builder is not registered")
-	}
+	// if !miner.bidSimulator.ExistBuilder(builder) {
+	// 	return common.Hash{}, types.NewInvalidBidError("builder is not registered")
+	// }
 
-	err = miner.bidSimulator.CheckPending(bidArgs.RawBid.BlockNumber, builder, bidArgs.RawBid.Hash())
-	if err != nil {
-		return common.Hash{}, err
-	}
+	// err = miner.bidSimulator.CheckPending(bidArgs.RawBid.BlockNumber, builder, bidArgs.RawBid.Hash())
+	// if err != nil {
+	// 	return common.Hash{}, err
+	// }
 
-	signer := types.MakeSigner(miner.worker.chainConfig, big.NewInt(int64(bidArgs.RawBid.BlockNumber)), uint64(time.Now().Unix()))
-	bid, err := bidArgs.ToBid(builder, signer)
-	if err != nil {
-		return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("fail to convert bidArgs to bid, %v", err))
-	}
+	// signer := types.MakeSigner(miner.worker.chainConfig, big.NewInt(int64(bidArgs.RawBid.BlockNumber)), uint64(time.Now().Unix()))
+	// bid, err := bidArgs.ToBid(builder, signer)
+	// if err != nil {
+	// 	return common.Hash{}, types.NewInvalidBidError(fmt.Sprintf("fail to convert bidArgs to bid, %v", err))
+	// }
 
-	bidBetterBefore := miner.bidSimulator.bidBetterBefore(bidArgs.RawBid.ParentHash)
-	timeout := time.Until(bidBetterBefore)
+	// bidBetterBefore := miner.bidSimulator.bidBetterBefore(bidArgs.RawBid.ParentHash)
+	// timeout := time.Until(bidBetterBefore)
 
-	if timeout <= 0 {
-		return common.Hash{}, fmt.Errorf("too late, expected befor %s, appeared %s later", bidBetterBefore,
-			common.PrettyDuration(timeout))
-	}
+	// if timeout <= 0 {
+	// 	return common.Hash{}, fmt.Errorf("too late, expected befor %s, appeared %s later", bidBetterBefore,
+	// 		common.PrettyDuration(timeout))
+	// }
 
-	err = miner.bidSimulator.sendBid(ctx, bid)
+	// err = miner.bidSimulator.sendBid(ctx, bid)
 
-	if err != nil {
-		return common.Hash{}, err
-	}
+	// if err != nil {
+	// 	return common.Hash{}, err
+	// }
 
-	return bid.Hash(), nil
+	// return bid.Hash(), nil
+	return common.Hash{}, nil
 }
 
 func (miner *Miner) BestPackedBlockReward(parentHash common.Hash) *big.Int {
-	bidRuntime := miner.bidSimulator.GetBestBid(parentHash)
-	if bidRuntime == nil {
-		return big.NewInt(0)
-	}
+	// bidRuntime := miner.bidSimulator.GetBestBid(parentHash)
+	// if bidRuntime == nil {
+	// 	return big.NewInt(0)
+	// }
 
-	return bidRuntime.packedBlockReward
+	// return bidRuntime.packedBlockReward
+	return nil
 }
 
 func (miner *Miner) MevParams() *types.MevParams {
-	builderFeeCeil, ok := big.NewInt(0).SetString(miner.worker.config.Mev.BuilderFeeCeil, 10)
+	builderFeeCeil, ok := big.NewInt(0).SetString(miner.worker.workers[0].config.Mev.BuilderFeeCeil, 10)
 	if !ok {
-		log.Error("failed to parse builder fee ceil", "BuilderFeeCeil", miner.worker.config.Mev.BuilderFeeCeil)
+		log.Error("failed to parse builder fee ceil", "BuilderFeeCeil", miner.worker.workers[0].config.Mev.BuilderFeeCeil)
 		return nil
 	}
 
 	return &types.MevParams{
-		ValidatorCommission:   miner.worker.config.Mev.ValidatorCommission,
-		BidSimulationLeftOver: miner.worker.config.Mev.BidSimulationLeftOver,
-		GasCeil:               miner.worker.config.GasCeil,
-		GasPrice:              miner.worker.config.GasPrice,
+		ValidatorCommission:   miner.worker.workers[0].config.Mev.ValidatorCommission,
+		BidSimulationLeftOver: miner.worker.workers[0].config.Mev.BidSimulationLeftOver,
+		GasCeil:               miner.worker.workers[0].config.GasCeil,
+		GasPrice:              miner.worker.workers[0].config.GasPrice,
 		BuilderFeeCeil:        builderFeeCeil,
 		Version:               params.Version,
 	}
