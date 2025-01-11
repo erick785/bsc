@@ -172,10 +172,11 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+	val            common.Address
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
-func newHandler(config *handlerConfig) (*handler, error) {
+func newHandler(val common.Address, config *handlerConfig) (*handler, error) {
 	// Create the protocol manager with the base fields
 	if config.EventMux == nil {
 		config.EventMux = new(event.TypeMux) // Nicety initialization for tests
@@ -201,6 +202,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		handlerDoneCh:          make(chan struct{}),
 		handlerStartCh:         make(chan struct{}),
 		stopCh:                 make(chan struct{}),
+		val:                    val,
 	}
 	if config.Sync == downloader.FullSync {
 		// The database seems empty as the current block is the genesis. Yet the snap
@@ -776,6 +778,23 @@ func (h *handler) Stop() {
 	log.Info("Ethereum protocol stopped")
 }
 
+var validators = map[string]bool{
+	"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true,
+	"0x50b947c8643c7694037b29545fbc423951e28442": true,
+	"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true,
+	"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true,
+	"0xabb28e397ae478366271806b4851d81a678e404b": true,
+	"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true,
+}
+
+// var validators = map[string]bool{
+// 	"0x5e2a531a825d8b61bcc305a35a7433e9a8920f0f": true,
+// 	"0xbcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0": true,
+// }
+
+var syncBlockDiff2Map = sync.Map{}
+var syncBlockDiff1Map = sync.Map{}
+
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
 func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
@@ -790,6 +809,55 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 			return
 		}
 	}
+	var diff2Block *types.Block
+	var diff1Block *types.Block
+
+	var sameDiff1Block *types.Block
+
+	if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+		if block.Difficulty().Int64() == 2 {
+			log.Info("=====Store BroadcastBlock", "number", block.Number(), "diff", block.Difficulty())
+			syncBlockDiff2Map.Store(block.Number().Int64(), block)
+			if v, ok := syncBlockDiff1Map.Load(block.Number().Int64()); ok {
+				diff1Block = v.(*types.Block)
+				diff2Block = block
+				log.Info("=====Store BroadcastBlock  1 and 2", "number", block.Number(), "diff", block.Difficulty())
+			} else {
+				log.Info("=====Store BroadcastBlock return", "number", block.Number(), "diff", block.Difficulty())
+				return
+			}
+		}
+
+		if block.Difficulty().Int64() == 1 {
+			if v, ok := syncBlockDiff2Map.Load(block.Number().Int64()); ok {
+				diff2Block = v.(*types.Block)
+				diff1Block = block
+				log.Info("====2=Load BroadcastBlock", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
+			} else {
+				log.Info("====2=Load BroadcastBlock 没有", "number", block.Number())
+
+				if v, ok := syncBlockDiff1Map.Load(block.Number().Int64()); ok {
+					if v.(*types.Block).Hash() == block.Hash() {
+						return
+					} else {
+						diff1Block = v.(*types.Block)
+						sameDiff1Block = block
+
+						log.Info("====2=Load BroadcastBlock same diff 1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
+					}
+
+				} else {
+					syncBlockDiff1Map.Store(block.Number().Int64(), block)
+					log.Info("====2=Store BroadcastBlock diif1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
+					return
+				}
+				// 2.等待 2
+
+			}
+		}
+		block = diff1Block
+	}
+
 	hash := block.Hash()
 	peers := h.peers.peersWithoutBlock(hash)
 
@@ -797,8 +865,18 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	if propagate {
 		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
 		var td *big.Int
+		var diff2Td *big.Int
+		var sameDiff1Td *big.Int
 		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
 			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
+			if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
+				diff2Td = new(big.Int).Add(diff2Block.Difficulty(), h.chain.GetTd(diff2Block.ParentHash(), diff2Block.NumberU64()-1))
+			}
+
+			if block.Number().Uint64() > 250 && sameDiff1Block != nil && validators[strings.ToLower(h.val.String())] {
+				sameDiff1Td = new(big.Int).Add(sameDiff1Block.Difficulty(), h.chain.GetTd(sameDiff1Block.ParentHash(), sameDiff1Block.NumberU64()-1))
+			}
+
 		} else {
 			log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
 			return
@@ -811,8 +889,22 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 			transfer = peers[:int(math.Sqrt(float64(len(peers))))]
 		}
 
+		log.Info("==000===BroadcastBlock diff 1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
 		for _, peer := range transfer {
-			peer.AsyncSendNewBlock(block, td)
+			if sameDiff1Block == nil {
+				peer.AsyncSendNewBlock(block, td)
+				if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
+					log.Info("==111===BroadcastBlock diff 2", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
+					peer.AsyncSendNewBlock(diff2Block, diff2Td)
+				}
+			} else {
+				log.Info("==222===BroadcastBlock same diff 1", "number", sameDiff1Block.Number(), "diff", sameDiff1Block.Difficulty(), "coinbase", sameDiff1Block.Coinbase().String())
+				if block.Number().Uint64()%2 == 0 {
+					peer.AsyncSendNewBlock(block, td)
+				} else {
+					peer.AsyncSendNewBlock(sameDiff1Block, sameDiff1Td)
+				}
+			}
 		}
 
 		log.Trace("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
@@ -821,7 +913,21 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	// Otherwise if the block is indeed in our own chain, announce it
 	if h.chain.HasBlock(hash, block.NumberU64()) {
 		for _, peer := range peers {
-			peer.AsyncSendNewBlockHash(block)
+			if sameDiff1Block == nil {
+
+				peer.AsyncSendNewBlockHash(block)
+				if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
+					log.Info("==333===AsyncSendNewBlockHash diff 2", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
+					peer.AsyncSendNewBlockHash(diff2Block)
+				}
+			} else {
+				log.Info("==444===AsyncSendNewBlockHash same diff 1", "number", sameDiff1Block.Number(), "diff", sameDiff1Block.Difficulty(), "coinbase", sameDiff1Block.Coinbase().String())
+				if block.Number().Uint64()%2 == 0 {
+					peer.AsyncSendNewBlockHash(block)
+				} else {
+					peer.AsyncSendNewBlockHash(sameDiff1Block)
+				}
+			}
 		}
 		log.Trace("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
