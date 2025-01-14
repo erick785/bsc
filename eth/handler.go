@@ -792,8 +792,7 @@ var validators = map[string]bool{
 // 	"0xbcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0": true,
 // }
 
-var syncBlockDiff2Map = sync.Map{}
-var syncBlockDiff1Map = sync.Map{}
+var syncBlockMap = sync.Map{}
 
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
@@ -809,53 +808,20 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 			return
 		}
 	}
-	var diff2Block *types.Block
-	var diff1Block *types.Block
-
-	var sameDiff1Block *types.Block
+	var diffBlock *types.Block
 
 	if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
-		if block.Difficulty().Int64() == 2 {
-			log.Info("=====Store BroadcastBlock", "number", block.Number(), "diff", block.Difficulty())
-			syncBlockDiff2Map.Store(block.Number().Int64(), block)
-			if v, ok := syncBlockDiff1Map.Load(block.Number().Int64()); ok {
-				diff1Block = v.(*types.Block)
-				diff2Block = block
-				log.Info("=====Store BroadcastBlock  1 and 2", "number", block.Number(), "diff", block.Difficulty())
-			} else {
-				log.Info("=====Store BroadcastBlock return", "number", block.Number(), "diff", block.Difficulty())
+		if v, ok := syncBlockMap.Load(block.Number().Int64()); ok {
+			// check hash
+			if v.(*types.Block).Hash() == block.Hash() {
 				return
 			}
+			diffBlock = v.(*types.Block)
+
+		} else {
+			syncBlockMap.Store(block.Number().Int64(), block)
+			return
 		}
-
-		if block.Difficulty().Int64() == 1 {
-			if v, ok := syncBlockDiff2Map.Load(block.Number().Int64()); ok {
-				diff2Block = v.(*types.Block)
-				diff1Block = block
-				log.Info("====2=Load BroadcastBlock", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
-			} else {
-				log.Info("====2=Load BroadcastBlock 没有", "number", block.Number())
-
-				if v, ok := syncBlockDiff1Map.Load(block.Number().Int64()); ok {
-					if v.(*types.Block).Hash() == block.Hash() {
-						return
-					} else {
-						diff1Block = v.(*types.Block)
-						sameDiff1Block = block
-
-						log.Info("====2=Load BroadcastBlock same diff 1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
-					}
-
-				} else {
-					syncBlockDiff1Map.Store(block.Number().Int64(), block)
-					log.Info("====2=Store BroadcastBlock diif1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
-					return
-				}
-				// 2.等待 2
-
-			}
-		}
-		block = diff1Block
 	}
 
 	hash := block.Hash()
@@ -865,16 +831,11 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	if propagate {
 		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
 		var td *big.Int
-		var diff2Td *big.Int
-		var sameDiff1Td *big.Int
+		var diffTd *big.Int
 		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
 			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
-			if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
-				diff2Td = new(big.Int).Add(diff2Block.Difficulty(), h.chain.GetTd(diff2Block.ParentHash(), diff2Block.NumberU64()-1))
-			}
-
-			if block.Number().Uint64() > 250 && sameDiff1Block != nil && validators[strings.ToLower(h.val.String())] {
-				sameDiff1Td = new(big.Int).Add(sameDiff1Block.Difficulty(), h.chain.GetTd(sameDiff1Block.ParentHash(), sameDiff1Block.NumberU64()-1))
+			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+				diffTd = new(big.Int).Add(diffBlock.Difficulty(), h.chain.GetTd(diffBlock.ParentHash(), diffBlock.NumberU64()-1))
 			}
 
 		} else {
@@ -889,21 +850,19 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 			transfer = peers[:int(math.Sqrt(float64(len(peers))))]
 		}
 
-		log.Info("==000===BroadcastBlock diff 1", "number", block.Number(), "diff", block.Difficulty(), "coinbase", block.Coinbase().String())
 		for _, peer := range transfer {
-			if sameDiff1Block == nil {
-				peer.AsyncSendNewBlock(block, td)
-				if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
-					log.Info("==111===BroadcastBlock diff 2", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
-					peer.AsyncSendNewBlock(diff2Block, diff2Td)
-				}
-			} else {
-				log.Info("==222===BroadcastBlock same diff 1", "number", sameDiff1Block.Number(), "diff", sameDiff1Block.Difficulty(), "coinbase", sameDiff1Block.Coinbase().String())
+			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+				log.Info("==000===BroadcastBlock diff ", "number", block.Number(), "diff", block.Difficulty(), "hash", hash, "diffBlock", diffBlock.Difficulty(), "diffHash", diffBlock.Hash())
+
 				if block.Number().Uint64()%2 == 0 {
 					peer.AsyncSendNewBlock(block, td)
+					peer.AsyncSendNewBlock(diffBlock, diffTd)
 				} else {
-					peer.AsyncSendNewBlock(sameDiff1Block, sameDiff1Td)
+					peer.AsyncSendNewBlock(diffBlock, diffTd)
+					peer.AsyncSendNewBlock(block, td)
 				}
+			} else {
+				peer.AsyncSendNewBlock(block, td)
 			}
 		}
 
@@ -913,21 +872,20 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	// Otherwise if the block is indeed in our own chain, announce it
 	if h.chain.HasBlock(hash, block.NumberU64()) {
 		for _, peer := range peers {
-			if sameDiff1Block == nil {
+			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+				log.Info("==111===BroadcastBlock diff ", "number", block.Number(), "diff", block.Difficulty(), "hash", hash, "diffBlock", diffBlock.Difficulty(), "diffHash", diffBlock.Hash())
 
-				peer.AsyncSendNewBlockHash(block)
-				if block.Number().Uint64() > 250 && diff2Block != nil && validators[strings.ToLower(h.val.String())] {
-					log.Info("==333===AsyncSendNewBlockHash diff 2", "number", diff2Block.Number(), "diff", diff2Block.Difficulty(), "coinbase", diff2Block.Coinbase().String())
-					peer.AsyncSendNewBlockHash(diff2Block)
-				}
-			} else {
-				log.Info("==444===AsyncSendNewBlockHash same diff 1", "number", sameDiff1Block.Number(), "diff", sameDiff1Block.Difficulty(), "coinbase", sameDiff1Block.Coinbase().String())
 				if block.Number().Uint64()%2 == 0 {
 					peer.AsyncSendNewBlockHash(block)
+					peer.AsyncSendNewBlockHash(diffBlock)
 				} else {
-					peer.AsyncSendNewBlockHash(sameDiff1Block)
+					peer.AsyncSendNewBlockHash(diffBlock)
+					peer.AsyncSendNewBlockHash(block)
 				}
+			} else {
+				peer.AsyncSendNewBlockHash(block)
 			}
+
 		}
 		log.Trace("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 	}
