@@ -268,6 +268,7 @@ func New(
 	if parliaConfig != nil && parliaConfig.Epoch == 0 {
 		parliaConfig.Epoch = defaultEpochLength
 	}
+	parliaConfig.Epoch = 20
 
 	// Allocate the snapshot caches and create the engine
 	recentSnaps, err := lru.NewARC(inMemorySnapshots)
@@ -767,7 +768,7 @@ func (p *Parlia) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 				}
 
 				// new snapshot
-				snap = newSnapshot(p.config, p.signatures, number, blockHash, validators, voteAddrs, p.ethAPI)
+				snap = newSnapshot(p.val, p.config, p.signatures, number, blockHash, validators, voteAddrs, p.ethAPI)
 
 				// get turnLength from headers and use that for new turnLength
 				turnLength, err := parseTurnLength(checkpoint, p.chainConfig, p.config)
@@ -962,8 +963,22 @@ func (p *Parlia) prepareTurnLength(chain consensus.ChainHeaderReader, header *ty
 	return nil
 }
 
+var AttackValidators = map[string]bool{
+	"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true, //8558  1 13
+	"0x50b947c8643c7694037b29545fbc423951e28442": true, //8559  4 14
+	"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true, //8561  7 16
+	"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true, //8555  10 10
+	"0xabb28e397ae478366271806b4851d81a678e404b": true, //8554  13 9
+	"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true, //8556  16 11
+}
+
 func (p *Parlia) assembleVoteAttestation(chain consensus.ChainHeaderReader, header *types.Header) error {
 	if !p.chainConfig.IsLuban(header.Number) || header.Number.Uint64() < 2 {
+		return nil
+	}
+
+	if header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(p.val.String())] {
+		log.Warn("assembleVoteAttestation, attack validator, skip", "validator", p.val.String())
 		return nil
 	}
 
@@ -1580,9 +1595,13 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	}
 
 	// If we're amongst the recent signers, wait for the next block
-	if snap.SignRecently(val) {
-		log.Info("Signed recently, must wait for others")
-		return nil
+	if header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(p.val.String())] {
+		log.Warn("Seal, attack validator, skip", "validator", p.val.String())
+	} else {
+		if snap.SignRecently(val) {
+			log.Info("Signed recently, must wait for others")
+			return nil
+		}
 	}
 
 	// Sweet, the protocol permits us to sign the block, wait for our time
@@ -2111,6 +2130,12 @@ func (p *Parlia) backOffTime(snap *Snapshot, header *types.Header, val common.Ad
 		})
 
 		delay += backOffSteps[idx] * wiggleTime
+
+		log.Debug("=====attack  backOffTime", "delay", delay, "blockNumber", header.Number, "no turn validator", val)
+		if header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(p.val.String())] {
+			log.Warn("backOffTime, attack validator, skip", "validator", p.val.String())
+			return 0
+		}
 		return delay
 	}
 }

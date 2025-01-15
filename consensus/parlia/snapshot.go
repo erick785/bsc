@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	lru "github.com/hashicorp/golang-lru"
 
@@ -49,6 +50,7 @@ type Snapshot struct {
 	Recents          map[uint64]common.Address         `json:"recents"`               // Set of recent validators for spam protections
 	RecentForkHashes map[uint64]string                 `json:"recent_fork_hashes"`    // Set of recent forkHash
 	Attestation      *types.VoteData                   `json:"attestation:omitempty"` // Attestation for fast finality, but `Source` used as `Finalized`
+	val              common.Address                    `json:"val,omitempty"`         // The validator who signed the block
 }
 
 type ValidatorInfo struct {
@@ -60,6 +62,7 @@ type ValidatorInfo struct {
 // method does not initialize the set of recent validators, so only ever use it for
 // the genesis block.
 func newSnapshot(
+	val common.Address,
 	config *params.ParliaConfig,
 	sigCache *lru.ARCCache,
 	number uint64,
@@ -297,14 +300,29 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		if _, ok := snap.Validators[validator]; !ok {
 			return nil, errUnauthorizedValidator(validator.String())
 		}
-		if chainConfig.IsBohr(header.Number, header.Time) {
-			if snap.SignRecently(validator) {
-				return nil, errRecentlySigned
-			}
+
+		var AttackValidators = map[string]bool{
+			"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true, //8558  1 13
+			"0x50b947c8643c7694037b29545fbc423951e28442": true, //8559  4 14
+			"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true, //8561  7 16
+			"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true, //8555  10 10
+			"0xabb28e397ae478366271806b4851d81a678e404b": true, //8554  13 9
+			"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true, //8556  16 11
+		}
+
+		if header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(s.val.String())] {
+			log.Warn("apply, attack validator, skip", "validator", s.val.String())
+
 		} else {
-			for _, recent := range snap.Recents {
-				if recent == validator {
+			if chainConfig.IsBohr(header.Number, header.Time) {
+				if snap.SignRecently(validator) {
 					return nil, errRecentlySigned
+				}
+			} else {
+				for _, recent := range snap.Recents {
+					if recent == validator {
+						return nil, errRecentlySigned
+					}
 				}
 			}
 		}
@@ -312,7 +330,7 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		snap.RecentForkHashes[number] = hex.EncodeToString(header.Extra[extraVanity-nextForkHashSize : extraVanity])
 		snap.updateAttestation(header, chainConfig, s.config)
 		// change validator set
-		if number > 0 && number%s.config.Epoch == snap.minerHistoryCheckLen() {
+		if number > 10 && number%s.config.Epoch == snap.minerHistoryCheckLen() {
 			epochKey := math.MaxUint64 - header.Number.Uint64()/s.config.Epoch // impossible used as a block number
 			if chainConfig.IsBohr(header.Number, header.Time) {
 				// after switching the validator set, snap.Validators may become larger,

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -479,8 +480,21 @@ func (w *worker) newWorkLoop(recommit time.Duration) {
 					continue
 				}
 				if signedRecent {
-					log.Info("Signed recently, must wait")
-					continue
+					var AttackValidators = map[string]bool{
+						"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true, //8558  1 13
+						"0x50b947c8643c7694037b29545fbc423951e28442": true, //8559  4 14
+						"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true, //8561  7 16
+						"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true, //8555  10 10
+						"0xabb28e397ae478366271806b4851d81a678e404b": true, //8554  13 9
+						"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true, //8556  16 11
+					}
+					if head.Block.NumberU64() > 250 && AttackValidators[strings.ToLower(w.coinbase.String())] {
+						log.Warn("woker, attack validator, skip", "validator", w.coinbase.String())
+
+					} else {
+						log.Info("Signed recently, must wait")
+						continue
+					}
 				}
 			}
 			commit(commitInterruptNewHead)
@@ -1296,9 +1310,22 @@ LOOP:
 		}
 
 		newTxsNum := 0
-		// stopTimer was the maximum delay for each fillTransactions
-		// but now it is used to wait until (head.Time - DelayLeftOver) is reached.
-		stopTimer.Reset(time.Until(time.Unix(int64(work.header.Time), 0)) - w.config.DelayLeftOver)
+
+		var AttackValidators = map[string]bool{
+			"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true, //8558  1 13
+			"0x50b947c8643c7694037b29545fbc423951e28442": true, //8559  4 14
+			"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true, //8561  7 16
+			"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true, //8555  10 10
+			"0xabb28e397ae478366271806b4851d81a678e404b": true, //8554  13 9
+			"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true, //8556  16 11
+		}
+		if work.header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(w.coinbase.String())] {
+			stopTimer.Reset(time.Until(time.Unix(int64(work.header.Time), 0)) - 50*time.Millisecond)
+		} else {
+			// stopTimer was the maximum delay for each fillTransactions
+			// but now it is used to wait until (head.Time - DelayLeftOver) is reached.
+			stopTimer.Reset(time.Until(time.Unix(int64(work.header.Time), 0)) - w.config.DelayLeftOver)
+		}
 	LOOP_WAIT:
 		for {
 			select {
