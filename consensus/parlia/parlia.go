@@ -268,7 +268,6 @@ func New(
 	if parliaConfig != nil && parliaConfig.Epoch == 0 {
 		parliaConfig.Epoch = defaultEpochLength
 	}
-	parliaConfig.Epoch = 20
 
 	// Allocate the snapshot caches and create the engine
 	recentSnaps, err := lru.NewARC(inMemorySnapshots)
@@ -1197,6 +1196,9 @@ func (p *Parlia) distributeFinalityReward(chain consensus.ChainHeaderReader, sta
 
 	head := header
 	accumulatedWeights := make(map[common.Address]uint64)
+	accumulatedVoteWeights := make(map[common.Address]uint64)
+	accumulatedExcessVoteWeights := make(map[common.Address]uint64)
+
 	for height := currentHeight - 1; height+epoch >= currentHeight && height >= 1; height-- {
 		head = chain.GetHeaderByHash(head.ParentHash)
 		if head == nil {
@@ -1229,12 +1231,14 @@ func (p *Parlia) distributeFinalityReward(chain consensus.ChainHeaderReader, sta
 		for index, val := range validators {
 			if validatorsBitSet.Test(uint(index)) {
 				accumulatedWeights[val] += 1
+				accumulatedVoteWeights[val] += 1
 				validVoteCount += 1
 			}
 		}
 		quorum := cmath.CeilDiv(len(snap.Validators)*2, 3)
 		if validVoteCount > quorum {
 			accumulatedWeights[head.Coinbase] += uint64((validVoteCount - quorum) * collectAdditionalVotesRewardRatio / 100)
+			accumulatedExcessVoteWeights[head.Coinbase] += uint64((validVoteCount - quorum) * collectAdditionalVotesRewardRatio / 100)
 		}
 	}
 
@@ -1246,6 +1250,43 @@ func (p *Parlia) distributeFinalityReward(chain consensus.ChainHeaderReader, sta
 	sort.Sort(validatorsAscending(validators))
 	for _, val := range validators {
 		weights = append(weights, big.NewInt(int64(accumulatedWeights[val])))
+	}
+
+	validatorsID := map[string]int{
+		"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": 1,  //8558  1 13
+		"0x297e5ebba75bbb67de013eb3d319dd0a2a9861e9": 2,  //8565  2 20
+		"0x3ad55d1d552cc55dee90c0faf0335383b2e6c5ce": 3,  //8548  3 3
+		"0x50b947c8643c7694037b29545fbc423951e28442": 4,  //8559  4 14
+		"0x511aa4d222618f8698feaab811023ca4e8bebfe5": 5,  //8562  5 17
+		"0x51cb3d0f6b77ef8317b31f4aaeaa75e4cff3cca7": 6,  //8553  6 8
+		"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": 7,  //8561  7 16
+		"0x5e2a531a825d8b61bcc305a35a7433e9a8920f0f": 8,  //8547  8	2
+		"0x5fda3ff6ea581ea7a5a9c2cb310b13c2126b4e8b": 9,  //8551  9 6
+		"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": 10, //8555  10 10
+		"0x9b50a300da0cd7e036ec2cc12418756ec07004bd": 11, //8564  11 19
+		"0xa8938f397823afcaa252bb7df137d39396456983": 12, //8560  12 15
+		"0xabb28e397ae478366271806b4851d81a678e404b": 13, //8554  13 9
+		"0xbbd1acc20bd8304309d31d8fd235210d0efc049d": 14, //8546  14 1
+		"0xbcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0": 15, //8545  15 0
+		"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": 16, //8556  16 11
+		"0xd2d3139575c2824d793d1664c2e1aaeecade11c0": 17, //8557  17 12
+		"0xd30d79639bc9c4ed71031bce28216862b80f4b6b": 18, //8552  18 7
+		"0xe9693a85e563485da999b7d378d60483e89caa0e": 19, //8563  19 18
+		"0xf7698afa5461438ff438c2322d6d29a5f7abdffd": 20, //8550  20 5
+		"0xfe02c8ff2374583c47b1d62fdf3e1b72c20ebe29": 21, //8549  21 4
+	}
+
+	if header.Number.Uint64() > 250 {
+		fmt.Println("finality reward", "number", currentHeight)
+		for _, val := range validators {
+			fmt.Println(val.String(), ",", validatorsID[strings.ToLower(val.String())], ",", accumulatedVoteWeights[val])
+			log.Info("finality reward======>", "number", currentHeight, "validator", val.String(), "index", validatorsID[strings.ToLower(val.String())], "weight", accumulatedVoteWeights[val])
+		}
+		fmt.Println("excess vote weights", "number", currentHeight)
+		for _, val := range validators {
+			fmt.Println(val.String(), ",", validatorsID[strings.ToLower(val.String())], ",", accumulatedExcessVoteWeights[val])
+			log.Info("excess vote weights======>", "number", currentHeight, "validator", val.String(), "index", validatorsID[strings.ToLower(val.String())], "weight", accumulatedExcessVoteWeights[val])
+		}
 	}
 
 	// generate system transaction
