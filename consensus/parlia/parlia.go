@@ -428,11 +428,19 @@ func getValidatorBytesFromHeader(header *types.Header, chainConfig *params.Chain
 	endPos := len(header.Extra) - extraSeal
 	vrfProofDetected := false
 
-	// Check if VRF proof is present
+	// Check if VRF proof is present by searching backwards from signature
 	if len(header.Extra) >= extraVanity+extraSeal+vrfProofLength {
-		vrfLenPos := len(header.Extra) - extraSeal - vrfProofLength
-		if vrfLenPos >= extraVanity {
+		// Search for VRF proof starting from just before the signature
+		startSearchPos := extraVanity
+		if isEpoch {
+			// For epoch blocks, VRF would be after validators
+			// We'll determine validator length below
+		}
+
+		// Try to find VRF proof by checking backwards from signature
+		for vrfLenPos := len(header.Extra) - extraSeal - vrfProofLength; vrfLenPos >= startSearchPos && vrfLenPos >= extraVanity; vrfLenPos-- {
 			vrfLen := int(header.Extra[vrfLenPos])<<8 | int(header.Extra[vrfLenPos+1])
+
 			log.Debug("Checking VRF proof presence",
 				"blockNumber", blockNumber,
 				"vrfLenPos", vrfLenPos,
@@ -443,15 +451,22 @@ func getValidatorBytesFromHeader(header *types.Header, chainConfig *params.Chain
 				vrfProofStart := vrfLenPos + vrfProofLength
 				vrfProofEnd := vrfProofStart + vrfLen
 				// Check if VRF proof structure is valid: [content][vrfLen(2)][vrfProof][signature(65)]
-				if vrfProofEnd+extraSeal == len(header.Extra) && vrfLenPos >= extraVanity {
+				if vrfProofEnd+extraSeal == len(header.Extra) {
 					// VRF proof is present, adjust endPos to exclude vrfLen and vrfProof
 					endPos = vrfLenPos
 					vrfProofDetected = true
 					log.Info("VRF proof detected in Extra",
 						"blockNumber", blockNumber,
 						"vrfLen", vrfLen,
+						"vrfLenPos", vrfLenPos,
 						"newEndPos", endPos)
+					break
 				}
+			}
+
+			// Optimization: don't search too far back
+			if vrfLenPos < len(header.Extra)-extraSeal-1024-vrfProofLength {
+				break
 			}
 		}
 	}

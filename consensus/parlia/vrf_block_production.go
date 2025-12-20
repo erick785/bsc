@@ -364,7 +364,7 @@ func (p *Parlia) verifyVRFEligibility(header *types.Header, parentTime uint64) e
 }
 
 // extractVRFProofFromExtra extracts VRF proof from the Extra field of a header
-// Extra format: [vanity 32][validators (variable, epoch only)][vrfLen 2][vrfProof (variable)][signature 65]
+// Extra format: [vanity 32][validators (variable, epoch only)][turnLength][voteAttestation][vrfLen 2][vrfProof (variable)][signature 65]
 // Returns nil if no VRF proof is present
 func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte) []byte {
 	const (
@@ -373,42 +373,74 @@ func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte
 		vrfProofLength = 2
 	)
 
+	log.Debug("extractVRFProofFromExtra called",
+		"extraLen", len(extra),
+		"isEpoch", isEpoch,
+		"validatorsBytesLen", len(validatorsBytes))
+
 	// Minimum length check
 	if len(extra) < extraVanity+extraSeal+vrfProofLength {
+		log.Debug("Extra too short for VRF proof", "extraLen", len(extra))
 		return nil
 	}
 
-	// VRF proof is located right before the signature (last 65 bytes)
-	// Read VRF length from the position: len(extra) - extraSeal - vrfProofLength
-	vrfLenPos := len(extra) - extraSeal - vrfProofLength
+	// Calculate where VRF proof might start
+	// VRF proof is inserted after: [vanity][validators (if epoch)][turnLength (if bohr)][voteAttestation (if present)]
+	// and before: [signature]
 
-	// Make sure vrfLenPos is after vanity (and validators if epoch)
-	minVrfLenPos := extraVanity
+	// Try to find VRF proof by checking from the expected start position
+	// Start position: after vanity and validators
+	startSearchPos := extraVanity
 	if isEpoch {
-		minVrfLenPos = extraVanity + len(validatorsBytes)
+		startSearchPos = extraVanity + len(validatorsBytes)
 	}
 
-	if vrfLenPos < minVrfLenPos {
+	// The VRF proof should be somewhere between startSearchPos and (len(extra) - extraSeal)
+	// Structure: [vrfLen(2)][vrfProof(variable)]
+	endSearchPos := len(extra) - extraSeal
+
+	log.Debug("Searching for VRF proof",
+		"startSearchPos", startSearchPos,
+		"endSearchPos", endSearchPos)
+
+	// We need to find where vrfLen starts
+	// The signature is at the end, and VRF proof should be right before it
+	// So vrfLen should be at: endSearchPos - vrfProofLength - vrfProofDataLen
+	// But we don't know vrfProofDataLen yet
+
+	// Try reading from the position right before signature
+	if endSearchPos < startSearchPos+vrfProofLength {
+		log.Debug("Not enough space for VRF proof", "availableSpace", endSearchPos-startSearchPos)
 		return nil
 	}
 
-	// Read VRF proof length (2 bytes, big endian)
-	vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
+	// Check if there's a VRF proof marker right before the signature
+	// We read backwards: check the last possible position for vrfLen
+	for vrfLenPos := endSearchPos - vrfProofLength; vrfLenPos >= startSearchPos; vrfLenPos -= 1 {
+		vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
 
-	// Verify VRF proof length is reasonable
-	if vrfLen == 0 || vrfLen > 1024 { // Max 1KB for VRF proof
-		return nil
+		// Check if this could be a valid VRF length
+		if vrfLen > 0 && vrfLen <= 1024 {
+			vrfProofStart := vrfLenPos + vrfProofLength
+			vrfProofEnd := vrfProofStart + vrfLen
+
+			// Check if this structure fits perfectly before the signature
+			if vrfProofEnd+extraSeal == len(extra) {
+				log.Debug("Found VRF proof",
+					"vrfLenPos", vrfLenPos,
+					"vrfLen", vrfLen,
+					"vrfProofStart", vrfProofStart,
+					"vrfProofEnd", vrfProofEnd)
+				return extra[vrfProofStart:vrfProofEnd]
+			}
+		}
+
+		// Optimization: if we've moved too far back, stop searching
+		if vrfLenPos < endSearchPos-1024-vrfProofLength {
+			break
+		}
 	}
 
-	// Calculate VRF proof start position (right after vrfLen)
-	vrfProofStart := vrfLenPos + vrfProofLength
-	vrfProofEnd := vrfProofStart + vrfLen
-
-	// Verify the structure: [content][vrfLen(2)][vrfProof(variable)][signature(65)]
-	if vrfProofEnd+extraSeal != len(extra) {
-		return nil
-	}
-
-	// Extract VRF proof
-	return extra[vrfProofStart:vrfProofEnd]
+	log.Debug("No valid VRF proof found in Extra field")
+	return nil
 }

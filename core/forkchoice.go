@@ -99,30 +99,36 @@ func getVRFBeta(header *types.Header) []byte {
 		return nil // No room for VRF proof
 	}
 
-	// VRF proof length is located right before the signature
-	vrfLenPos := len(extra) - extraSeal - vrfProofLength
+	// VRF proof is located somewhere before the signature
+	// Search backwards to find it
+	endSearchPos := len(extra) - extraSeal
 
-	// Check if position is valid (must be after vanity)
-	if vrfLenPos < extraVanity {
-		return nil
+	// Try to find VRF proof by checking backwards from signature
+	var vrfProofData []byte
+	for vrfLenPos := endSearchPos - vrfProofLength; vrfLenPos >= extraVanity; vrfLenPos-- {
+		vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
+
+		// Check if this could be a valid VRF length
+		if vrfLen > 0 && vrfLen <= 1024 {
+			vrfProofStart := vrfLenPos + vrfProofLength
+			vrfProofEnd := vrfProofStart + vrfLen
+
+			// Check if this structure fits perfectly before the signature
+			if vrfProofEnd+extraSeal == len(extra) {
+				vrfProofData = extra[vrfProofStart:vrfProofEnd]
+				break
+			}
+		}
+
+		// Optimization: don't search too far back
+		if vrfLenPos < endSearchPos-1024-vrfProofLength {
+			break
+		}
 	}
 
-	// Read VRF proof length (2 bytes, big endian)
-	vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
-	if vrfLen == 0 || vrfLen > 1024 {
+	if vrfProofData == nil {
 		return nil
 	}
-
-	// Calculate VRF proof position: [content][vrfLen(2)][vrfProof(variable)][signature(65)]
-	vrfProofStart := vrfLenPos + vrfProofLength
-	vrfProofEnd := vrfProofStart + vrfLen
-
-	// Verify structure
-	if vrfProofEnd+extraSeal != len(extra) {
-		return nil
-	}
-
-	vrfProofData := extra[vrfProofStart:vrfProofEnd]
 
 	// Decode VRF proof to extract beta value
 	// Format: [beta_length(2 bytes)][beta][pi_length(2 bytes)][pi]
