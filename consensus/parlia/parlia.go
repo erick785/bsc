@@ -3,6 +3,7 @@ package parlia
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -240,6 +241,8 @@ type Parlia struct {
 	signFn   SignerFn       // Signer function to authorize hashes with
 	signTxFn SignerTxFn
 
+	privateKey *ecdsa.PrivateKey // Private key for VRF proof generation (optional, for VRF-based block production)
+
 	lock sync.RWMutex // Protects the signer fields
 
 	ethAPI                     *ethapi.BlockChainAPI
@@ -267,6 +270,29 @@ func New(
 	// Set any missing consensus parameters to their defaults
 	if parliaConfig != nil && parliaConfig.Epoch == 0 {
 		parliaConfig.Epoch = defaultEpochLength
+	}
+
+	// Set VRF configuration defaults
+	if parliaConfig != nil {
+
+		parliaConfig.EnableVRF = true
+		parliaConfig.VRFActivationBlock = big.NewInt(1)
+
+		if parliaConfig.VRFBaseThreshold == 0 {
+			parliaConfig.VRFBaseThreshold = 8 // Default: first hex digit < 8
+		}
+		if parliaConfig.VRFDegradeInterval == 0 {
+			parliaConfig.VRFDegradeInterval = parliaConfig.Period
+		}
+		if parliaConfig.VRFMaxThreshold == 0 || parliaConfig.VRFMaxThreshold > 16 {
+			parliaConfig.VRFMaxThreshold = 16 // Default: max threshold (all validators eligible)
+		}
+		log.Info("VRF configuration initialized",
+			"enableVRF", parliaConfig.EnableVRF,
+			"activationBlock", parliaConfig.VRFActivationBlock,
+			"baseThreshold", parliaConfig.VRFBaseThreshold,
+			"degradeInterval", parliaConfig.VRFDegradeInterval,
+			"maxThreshold", parliaConfig.VRFMaxThreshold)
 	}
 
 	// Allocate the snapshot caches and create the engine
@@ -697,6 +723,15 @@ func (p *Parlia) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 		return fmt.Errorf("invalid gas limit: have %d, want %d += %d", header.GasLimit, parent.GasLimit, limit-1)
 	}
 
+	// Verify VRF eligibility for VRF-based block production
+	if err := p.verifyVRFEligibility(header, parent.Time); err != nil {
+		log.Warn("VRF eligibility verification failed",
+			"blockNumber", number,
+			"coinbase", header.Coinbase.Hex(),
+			"error", err)
+		return err
+	}
+
 	// Verify vote attestation for fast finality.
 	if err := p.verifyVoteAttestation(chain, header, parents); err != nil {
 		log.Warn("Verify vote attestation failed", "error", err, "hash", header.Hash(), "number", header.Number,
@@ -899,7 +934,12 @@ func (p *Parlia) verifySeal(chain consensus.ChainHeaderReader, header *types.Hea
 	}
 
 	// Ensure that the difficulty corresponds to the turn-ness of the signer
-	if !p.fakeDiff {
+	// In VRF mode, skip difficulty check as all eligible validators produce blocks simultaneously
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		number >= p.config.VRFActivationBlock.Uint64()
+
+	if !p.fakeDiff && !vrfActive {
 		inturn := snap.inturn(signer)
 		if inturn && header.Difficulty.Cmp(diffInTurn) != 0 {
 			return errWrongDifficulty
@@ -1519,6 +1559,17 @@ func (p *Parlia) Authorize(val common.Address, signFn SignerFn, signTxFn SignerT
 	p.signTxFn = signTxFn
 }
 
+// AuthorizeWithKey authorizes a validator with private key for VRF-based block production
+func (p *Parlia) AuthorizeWithKey(val common.Address, signFn SignerFn, signTxFn SignerTxFn, privateKey *ecdsa.PrivateKey) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	p.val = val
+	p.signFn = signFn
+	p.signTxFn = signTxFn
+	p.privateKey = privateKey
+}
+
 // Argument leftOver is the time reserved for block finalize(calculate root, distribute income...)
 func (p *Parlia) Delay(chain consensus.ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration {
 	number := header.Number.Uint64()
@@ -1585,8 +1636,47 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		return nil
 	}
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
-	delay := p.delayForRamanujanFork(snap, header)
+	// VRF eligibility check (if VRF is enabled)
+	parent := chain.GetHeader(header.ParentHash, number-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+
+	// Check VRF eligibility
+	p.lock.RLock()
+	privateKey := p.privateKey
+	p.lock.RUnlock()
+
+	eligible, vrfProof, err := p.checkVRFEligibility(privateKey, header, parent.Time)
+	if err != nil {
+		log.Error("VRF eligibility check error", "blockNumber", number, "err", err)
+		// If VRF check fails due to error, fall back to allowing production
+		// This ensures backward compatibility if private key is not set
+		if privateKey != nil {
+			return err
+		}
+	}
+
+	if !eligible {
+		log.Info("Not eligible to produce block by VRF",
+			"blockNumber", number,
+			"validator", val.Hex())
+		return nil
+	}
+
+	// Store VRF proof in header for later verification
+	if vrfProof != nil {
+		header.VRFProof = encodeVRFProof(vrfProof)
+		log.Info("VRF proof stored in header",
+			"blockNumber", number,
+			"beta", common.Bytes2Hex(vrfProof.Beta),
+			"firstDigit", getFirstHexDigit(vrfProof.Beta),
+			"proofLen", len(vrfProof.Pi))
+	}
+
+	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously
+	// Otherwise use the original delay mechanism
+	delay := p.calculateSealDelay(snap, header, parent)
 
 	log.Info("Sealing block with", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", val.Hex())
 
@@ -1643,6 +1733,18 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 }
 
 func (p *Parlia) shouldWaitForCurrentBlockProcess(chain consensus.ChainHeaderReader, header *types.Header, snap *Snapshot) bool {
+	// In VRF mode, all eligible validators produce blocks simultaneously
+	// No need to wait for any specific validator
+	blockNumber := header.Number.Uint64()
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		return false
+	}
+
+	// Legacy mode: wait for in-turn block to be processed first
 	if header.Difficulty.Cmp(diffInTurn) == 0 {
 		return false
 	}
@@ -1692,6 +1794,19 @@ func (p *Parlia) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, 
 	if err != nil {
 		return nil
 	}
+
+	// In VRF mode, all eligible validators have the same priority
+	// Use a unified difficulty value
+	blockNumber := parent.Number.Uint64() + 1
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		// VRF mode: use diffNoTurn for all validators
+		return new(big.Int).Set(diffNoTurn)
+	}
+
 	return CalcDifficulty(snap, p.val)
 }
 

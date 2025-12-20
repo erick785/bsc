@@ -24,6 +24,7 @@ import (
 	"crypto/ecdsa"
 	crand "crypto/rand"
 	"errors"
+	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -504,6 +505,28 @@ func (ks *KeyStore) isUpdating() bool {
 	ks.mu.RLock()
 	defer ks.mu.RUnlock()
 	return ks.updating
+}
+
+// GetUnlockedKey retrieves the private key from an unlocked account.
+// Returns nil if the account is not unlocked.
+// WARNING: The returned key should be used carefully and never exposed.
+func (ks *KeyStore) GetUnlockedKey(addr common.Address) (*Key, error) {
+	ks.mu.RLock()
+	defer ks.mu.RUnlock()
+
+	unl, found := ks.unlocked[addr]
+	if !found {
+		return nil, fmt.Errorf("account %s is not unlocked", addr.Hex())
+	}
+
+	// Return a copy of the key to avoid external modifications
+	keyCopy := &Key{
+		Id:         unl.Id,
+		Address:    unl.Address,
+		PrivateKey: unl.PrivateKey,
+	}
+
+	return keyCopy, nil
 }
 
 // zeroKey zeroes a private key in memory.

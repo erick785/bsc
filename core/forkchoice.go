@@ -17,6 +17,7 @@
 package core
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"errors"
 	"math/big"
@@ -76,6 +77,44 @@ func NewForkChoice(chainReader ChainReader, preserve func(header *types.Header) 
 	}
 }
 
+// getVRFBeta extracts the VRF beta value from a header's VRFProof field
+// Returns nil if VRF proof is missing or invalid
+func getVRFBeta(header *types.Header) []byte {
+	if len(header.VRFProof) == 0 {
+		return nil
+	}
+
+	// Decode VRF proof to extract beta value
+	// Format: [beta_length(2 bytes)][beta][pi_length(2 bytes)][pi]
+	if len(header.VRFProof) < 4 {
+		log.Debug("VRF proof too short", "blockNumber", header.Number, "proofLen", len(header.VRFProof))
+		return nil
+	}
+
+	// Extract beta length
+	betaLen := uint16(header.VRFProof[0])<<8 | uint16(header.VRFProof[1])
+	if len(header.VRFProof) < int(2+betaLen) {
+		log.Debug("Invalid VRF proof beta length", "blockNumber", header.Number, "betaLen", betaLen)
+		return nil
+	}
+
+	// Extract beta
+	beta := header.VRFProof[2 : 2+betaLen]
+	return beta
+}
+
+// isVRFActive checks if VRF-based fork choice is active for the given block
+func (f *ForkChoice) isVRFActive(blockNumber uint64) bool {
+	config := f.chain.Config()
+	if config.Parlia == nil || !config.Parlia.EnableVRF {
+		return false
+	}
+	if config.Parlia.VRFActivationBlock == nil {
+		return false
+	}
+	return blockNumber >= config.Parlia.VRFActivationBlock.Uint64()
+}
+
 // reorgNeeded returns whether the reorg should be applied
 // based on the given external header and local canonical chain.
 // In the td mode, the new head is chosen if the corresponding
@@ -117,6 +156,53 @@ func (f *ForkChoice) ReorgNeeded(current *types.Header, extern *types.Header) (b
 	if externNum < localNum {
 		reorg = true
 	} else if externNum == localNum {
+		// VRF-based fork choice for blocks at the same height
+		// If VRF is active, compare beta values; higher beta wins (changed from lower to higher)
+		if f.isVRFActive(externNum) {
+			currentBeta := getVRFBeta(current)
+			externBeta := getVRFBeta(extern)
+
+			// If both headers have valid VRF proofs, use VRF-based comparison
+			if currentBeta != nil && externBeta != nil {
+				cmp := bytes.Compare(externBeta, currentBeta)
+				if cmp > 0 {
+					// extern beta is larger, should reorg
+					log.Info("VRF-based fork choice: extern has higher beta",
+						"currentBeta", common.Bytes2Hex(currentBeta),
+						"externBeta", common.Bytes2Hex(externBeta),
+						"currentNum", current.Number,
+						"currentHash", current.Hash(),
+						"externNum", extern.Number,
+						"externHash", extern.Hash())
+					return true, nil
+				} else if cmp < 0 {
+					// current beta is larger, keep current
+					log.Info("VRF-based fork choice: current has higher beta",
+						"currentBeta", common.Bytes2Hex(currentBeta),
+						"externBeta", common.Bytes2Hex(externBeta),
+						"currentNum", current.Number,
+						"currentHash", current.Hash(),
+						"externNum", extern.Number,
+						"externHash", extern.Hash())
+					return false, nil
+				}
+				// If beta values are equal (very unlikely), fall through to other rules
+				log.Warn("VRF beta values are identical, using fallback rules",
+					"beta", common.Bytes2Hex(currentBeta),
+					"currentNum", current.Number,
+					"externNum", extern.Number)
+			} else {
+				// Log if VRF proofs are missing (shouldn't happen in VRF mode)
+				if currentBeta == nil {
+					log.Debug("Current header missing VRF beta", "number", current.Number, "hash", current.Hash())
+				}
+				if externBeta == nil {
+					log.Debug("Extern header missing VRF beta", "number", extern.Number, "hash", extern.Hash())
+				}
+			}
+		}
+
+		// Fallback to traditional fork choice rules
 		var currentPreserve, externPreserve bool
 		if f.preserve != nil {
 			currentPreserve, externPreserve = f.preserve(current), f.preserve(extern)

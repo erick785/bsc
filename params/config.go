@@ -581,6 +581,13 @@ func (c *CliqueConfig) String() string {
 type ParliaConfig struct {
 	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
 	Epoch  uint64 `json:"epoch"`  // Epoch length to update validatorSet
+
+	// VRF-based block production configs
+	EnableVRF           bool     `json:"enableVRF"`           // Enable VRF-based probabilistic block production
+	VRFActivationBlock  *big.Int `json:"vrfActivationBlock"`  // Block number to activate VRF mechanism
+	VRFBaseThreshold    uint8    `json:"vrfBaseThreshold"`    // Base threshold for VRF eligibility (default 5, means first hex digit < 5)
+	VRFDegradeInterval  uint64   `json:"vrfDegradeInterval"`  // Time interval in seconds to degrade threshold (default 3)
+	VRFMaxThreshold     uint8    `json:"vrfMaxThreshold"`     // Maximum threshold, after which all validators are eligible (default 16)
 }
 
 // String implements the stringer interface, returning the consensus engine details.
