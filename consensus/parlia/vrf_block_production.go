@@ -384,63 +384,60 @@ func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte
 		return nil
 	}
 
-	// Calculate where VRF proof might start
-	// VRF proof is inserted after: [vanity][validators (if epoch)][turnLength (if bohr)][voteAttestation (if present)]
-	// and before: [signature]
+	// Calculate where VRF proof should be
+	// We know the structure after insertion is:
+	// [vanity][validators (if epoch)][turnLength (if bohr)][voteAttestation (if present)][vrfLen(2)][vrfProof][signature(65)]
 
-	// Try to find VRF proof by checking from the expected start position
-	// Start position: after vanity and validators
-	startSearchPos := extraVanity
-	if isEpoch {
-		startSearchPos = extraVanity + len(validatorsBytes)
-	}
+	// The total length is: len(extra)
+	// Signature is the last 65 bytes
+	// So content (everything except signature) is: len(extra) - extraSeal
 
-	// The VRF proof should be somewhere between startSearchPos and (len(extra) - extraSeal)
-	// Structure: [vrfLen(2)][vrfProof(variable)]
-	endSearchPos := len(extra) - extraSeal
+	contentEndPos := len(extra) - extraSeal
 
-	log.Debug("Searching for VRF proof",
-		"startSearchPos", startSearchPos,
-		"endSearchPos", endSearchPos)
+	// VRF proof format: [vrfLen(2)][vrfProof(variable)]
+	// It should be at the end of content, right before signature
 
-	// We need to find where vrfLen starts
-	// The signature is at the end, and VRF proof should be right before it
-	// So vrfLen should be at: endSearchPos - vrfProofLength - vrfProofDataLen
-	// But we don't know vrfProofDataLen yet
-
-	// Try reading from the position right before signature
-	if endSearchPos < startSearchPos+vrfProofLength {
-		log.Debug("Not enough space for VRF proof", "availableSpace", endSearchPos-startSearchPos)
+	// Check if there's enough space for vrfLen
+	if contentEndPos < extraVanity+vrfProofLength {
+		log.Debug("Not enough space for VRF proof", "contentEndPos", contentEndPos)
 		return nil
 	}
 
-	// Check if there's a VRF proof marker right before the signature
-	// We read backwards: check the last possible position for vrfLen
-	for vrfLenPos := endSearchPos - vrfProofLength; vrfLenPos >= startSearchPos; vrfLenPos -= 1 {
+	// Read vrfLen from the position right before signature
+	// vrfLen is at position: contentEndPos - vrfProofLength - vrfLen
+	// But we need to calculate backwards: vrfLen ends at contentEndPos
+	// So we need to find where it starts
+
+	// Try the position right before signature
+	vrfLenPos := contentEndPos - vrfProofLength
+
+	// But this assumes VRF proof is exactly at the end
+	// Let's verify by reading the length and checking if structure is valid
+	if vrfLenPos >= extraVanity {
 		vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
 
-		// Check if this could be a valid VRF length
-		if vrfLen > 0 && vrfLen <= 1024 {
-			vrfProofStart := vrfLenPos + vrfProofLength
-			vrfProofEnd := vrfProofStart + vrfLen
+		log.Debug("Checking VRF proof at expected position",
+			"vrfLenPos", vrfLenPos,
+			"vrfLen", vrfLen,
+			"contentEndPos", contentEndPos)
 
-			// Check if this structure fits perfectly before the signature
-			if vrfProofEnd+extraSeal == len(extra) {
-				log.Debug("Found VRF proof",
+		// Verify VRF proof length is reasonable
+		if vrfLen > 0 && vrfLen <= 1024 {
+			// Check if structure is valid
+			// vrfProof starts at vrfLenPos + 2
+			// vrfProof ends at vrfLenPos + 2 + vrfLen
+			// This should equal contentEndPos
+			if vrfLenPos+vrfProofLength+vrfLen == contentEndPos {
+				vrfProofStart := vrfLenPos + vrfProofLength
+				log.Info("Found VRF proof",
 					"vrfLenPos", vrfLenPos,
 					"vrfLen", vrfLen,
-					"vrfProofStart", vrfProofStart,
-					"vrfProofEnd", vrfProofEnd)
-				return extra[vrfProofStart:vrfProofEnd]
+					"vrfProofStart", vrfProofStart)
+				return extra[vrfProofStart:contentEndPos]
 			}
-		}
-
-		// Optimization: if we've moved too far back, stop searching
-		if vrfLenPos < endSearchPos-1024-vrfProofLength {
-			break
 		}
 	}
 
-	log.Debug("No valid VRF proof found in Extra field")
+	log.Debug("No valid VRF proof found at expected position")
 	return nil
 }
