@@ -77,29 +77,65 @@ func NewForkChoice(chainReader ChainReader, preserve func(header *types.Header) 
 	}
 }
 
-// getVRFBeta extracts the VRF beta value from a header's VRFProof field
+// getVRFBeta extracts the VRF beta value from a header's Extra field
 // Returns nil if VRF proof is missing or invalid
 func getVRFBeta(header *types.Header) []byte {
-	if len(header.VRFProof) == 0 {
+	// Extract VRF proof from Extra field
+	// Extra format: [vanity 32][validators (variable, epoch only)][vrfLen 2][vrfProof (variable)][signature 65]
+	const (
+		extraVanity    = 32
+		extraSeal      = 65
+		vrfProofLength = 2
+	)
+
+	extra := header.Extra
+	if len(extra) < extraVanity+extraSeal {
 		return nil
 	}
 
+	// Find VRF proof start position (after vanity and validators if epoch)
+	// For simplicity, we scan for VRF proof length marker before signature
+	if len(extra) <= extraVanity+extraSeal+vrfProofLength {
+		return nil // No room for VRF proof
+	}
+
+	// VRF proof length is located before the signature
+	vrfLenPos := len(extra) - extraSeal - vrfProofLength
+
+	// Check if position is valid (must be after vanity)
+	if vrfLenPos < extraVanity {
+		return nil
+	}
+
+	// Read VRF proof length
+	vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
+	if vrfLen == 0 || vrfLen > 1024 {
+		return nil
+	}
+
+	// Calculate VRF proof position
+	vrfProofStart := vrfLenPos + vrfProofLength
+	vrfProofEnd := vrfProofStart + vrfLen
+	if vrfProofEnd+extraSeal != len(extra) {
+		return nil
+	}
+
+	vrfProofData := extra[vrfProofStart:vrfProofEnd]
+
 	// Decode VRF proof to extract beta value
 	// Format: [beta_length(2 bytes)][beta][pi_length(2 bytes)][pi]
-	if len(header.VRFProof) < 4 {
-		log.Debug("VRF proof too short", "blockNumber", header.Number, "proofLen", len(header.VRFProof))
+	if len(vrfProofData) < 4 {
 		return nil
 	}
 
 	// Extract beta length
-	betaLen := uint16(header.VRFProof[0])<<8 | uint16(header.VRFProof[1])
-	if len(header.VRFProof) < int(2+betaLen) {
-		log.Debug("Invalid VRF proof beta length", "blockNumber", header.Number, "betaLen", betaLen)
+	betaLen := uint16(vrfProofData[0])<<8 | uint16(vrfProofData[1])
+	if len(vrfProofData) < int(2+betaLen) {
 		return nil
 	}
 
 	// Extract beta
-	beta := header.VRFProof[2 : 2+betaLen]
+	beta := vrfProofData[2 : 2+betaLen]
 	return beta
 }
 

@@ -302,12 +302,16 @@ func (p *Parlia) verifyVRFEligibility(header *types.Header, parentTime uint64) e
 		return nil
 	}
 
-	// Extract VRF proof from header.VRFProof field
-	if len(header.VRFProof) == 0 {
-		return errors.New("missing VRF proof in header")
+	// Extract VRF proof from Extra field
+	isEpoch := blockNumber%p.config.Epoch == 0
+	validatorsBytes := getValidatorBytesFromHeader(header, p.chainConfig, p.config)
+	vrfProofData := extractVRFProofFromExtra(header.Extra, isEpoch, validatorsBytes)
+
+	if vrfProofData == nil {
+		return errors.New("missing VRF proof in Extra field")
 	}
 
-	vrfProof, err := decodeVRFProof(header.VRFProof)
+	vrfProof, err := decodeVRFProof(vrfProofData)
 	if err != nil {
 		return err
 	}
@@ -357,4 +361,65 @@ func (p *Parlia) verifyVRFEligibility(header *types.Header, parentTime uint64) e
 		"threshold", threshold)
 
 	return nil
+}
+
+// extractVRFProofFromExtra extracts VRF proof from the Extra field of a header
+// Extra format: [vanity 32][validators (variable, epoch only)][vrfLen 2][vrfProof (variable)][signature 65]
+// Returns nil if no VRF proof is present
+func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte) []byte {
+	const (
+		extraVanity    = 32
+		extraSeal      = 65
+		vrfProofLength = 2
+	)
+
+	// Minimum length check
+	if len(extra) < extraVanity+extraSeal {
+		return nil
+	}
+
+	// Calculate expected length without VRF proof
+	expectedMinLen := extraVanity + extraSeal
+	if isEpoch {
+		expectedMinLen += len(validatorsBytes)
+	}
+
+	// If Extra is exactly the expected length, no VRF proof
+	if len(extra) == expectedMinLen {
+		return nil
+	}
+
+	// If Extra is shorter than expected, no VRF proof
+	if len(extra) < expectedMinLen+vrfProofLength {
+		return nil
+	}
+
+	// Calculate start position of VRF proof length
+	vrfLenPos := extraVanity
+	if isEpoch {
+		vrfLenPos = extraVanity + len(validatorsBytes)
+	}
+
+	// Check if there's enough space for VRF proof length + signature
+	if vrfLenPos+vrfProofLength+extraSeal > len(extra) {
+		return nil
+	}
+
+	// Read VRF proof length (2 bytes, big endian)
+	vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
+
+	// Verify VRF proof length is reasonable
+	if vrfLen == 0 || vrfLen > 1024 { // Max 1KB for VRF proof
+		return nil
+	}
+
+	// Check if there's enough space for the VRF proof
+	vrfProofStart := vrfLenPos + vrfProofLength
+	vrfProofEnd := vrfProofStart + vrfLen
+	if vrfProofEnd+extraSeal != len(extra) {
+		return nil
+	}
+
+	// Extract VRF proof
+	return extra[vrfProofStart:vrfProofEnd]
 }

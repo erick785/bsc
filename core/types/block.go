@@ -121,9 +121,6 @@ type Header struct {
 
 	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
 	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
-
-	// VRFProof contains the VRF proof for probabilistic block production (optional, for Parlia VRF)
-	VRFProof []byte `json:"vrfProof" rlp:"optional"`
 }
 
 // field type overrides for gencodec
@@ -342,10 +339,6 @@ func CopyHeader(h *Header) *Header {
 	if h.ParentBeaconRoot != nil {
 		cpy.ParentBeaconRoot = new(common.Hash)
 		*cpy.ParentBeaconRoot = *h.ParentBeaconRoot
-	}
-	if len(h.VRFProof) > 0 {
-		cpy.VRFProof = make([]byte, len(h.VRFProof))
-		copy(cpy.VRFProof, h.VRFProof)
 	}
 	return &cpy
 }

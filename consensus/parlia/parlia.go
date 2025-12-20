@@ -60,6 +60,7 @@ const (
 
 	extraVanity      = 32 // Fixed number of extra-data prefix bytes reserved for signer vanity
 	extraSeal        = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
+	vrfProofLength   = 2  // 2 bytes to store VRF proof length (uint16)
 	nextForkHashSize = 4  // Fixed number of extra-data suffix bytes reserved for nextForkHash.
 	turnLengthSize   = 1  // Fixed number of extra-data suffix bytes reserved for turnLength
 
@@ -1664,14 +1665,36 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		return nil
 	}
 
-	// Store VRF proof in header for later verification
+	// Store VRF proof in Extra field for later verification
 	if vrfProof != nil {
-		header.VRFProof = encodeVRFProof(vrfProof)
-		log.Info("VRF proof stored in header",
+		vrfProofData := encodeVRFProof(vrfProof)
+		// Insert VRF proof before the signature (last 65 bytes)
+		// Format: [existing extra][vrfProofLength (2 bytes)][vrfProofData][signature (65 bytes)]
+		if len(header.Extra) < extraSeal {
+			return errMissingSignature
+		}
+		// Split: content (without signature) and signature placeholder
+		contentLen := len(header.Extra) - extraSeal
+		content := header.Extra[:contentLen]
+
+		// Encode VRF proof length as 2 bytes (big endian)
+		vrfLen := uint16(len(vrfProofData))
+		vrfLenBytes := []byte{byte(vrfLen >> 8), byte(vrfLen & 0xFF)}
+
+		// Rebuild Extra: [content][vrfLenBytes][vrfProofData][signature placeholder]
+		newExtra := make([]byte, 0, contentLen+vrfProofLength+len(vrfProofData)+extraSeal)
+		newExtra = append(newExtra, content...)
+		newExtra = append(newExtra, vrfLenBytes...)
+		newExtra = append(newExtra, vrfProofData...)
+		newExtra = append(newExtra, header.Extra[contentLen:]...) // Keep signature placeholder
+		header.Extra = newExtra
+
+		log.Info("VRF proof stored in Extra field",
 			"blockNumber", number,
 			"beta", common.Bytes2Hex(vrfProof.Beta),
 			"firstDigit", getFirstHexDigit(vrfProof.Beta),
-			"proofLen", len(vrfProof.Pi))
+			"proofLen", len(vrfProof.Pi),
+			"extraLen", len(header.Extra))
 	}
 
 	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously
