@@ -34,3 +34,56 @@ t=12-20|15:18:34.019 lvl=debug msg="Snapshot capped" root=0x5e442e685543203a11d6
 t=12-20|15:18:34.023 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
 t=12-20|15:18:34.024 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
 t=12-20|15:18:34.030 lvl=info msg="Successfully sealed new block" number=10 sealhash=0xc31fcc2bc1051f258786d4a313a7d28407f46098100d87a9037dd0595db73207 hash=0xab1045b045bc4229168b68c86608ed18eeeac6d48ca8777773f3613a1d1a4dc3 elapsed=28.868ms
+
+
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=130 vrfLen=49664
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=129 vrfLen=53954
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=128 vrfLen=35794
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=127 vrfLen=32907
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=126 vrfLen=7040
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=125 vrfLen=61723
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=124 vrfLen=12529
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=123 vrfLen=19504
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=122 vrfLen=23116
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=121 vrfLen=32858
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=120 vrfLen=38016
+t=12-20|15:39:05.554 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=119 vrfLen=9108
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=118 vrfLen=39459
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=117 vrfLen=31130
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=116 vrfLen=52601
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=115 vrfLen=49613
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=114 vrfLen=24001
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=113 vrfLen=56669
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=112 vrfLen=41181
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=111 vrfLen=11680
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=110 vrfLen=46893
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=109 vrfLen=12215
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=108 vrfLen=17199
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=107 vrfLen=6979
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=106 vrfLen=9755
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=105 vrfLen=1318
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=104 vrfLen=64517
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=103 vrfLen=15868
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=102 vrfLen=64829
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=101 vrfLen=41469
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=100 vrfLen=56993
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=99 vrfLen=27102
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=98 vrfLen=57961
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=97 vrfLen=42722
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=96 vrfLen=8614
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=95 vrfLen=23073
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=94 vrfLen=26714
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=93 vrfLen=5224
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=92 vrfLen=18452
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=91 vrfLen=48712
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=90 vrfLen=27582
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=89 vrfLen=6251
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=88 vrfLen=54040
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=87 vrfLen=22739
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=86 vrfLen=29528
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=85 vrfLen=26483
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=84 vrfLen=3943
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=83 vrfLen=64271
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=82 vrfLen=49915
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=81 vrfLen=28866
+t=12-20|15:39:05.555 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=80 vrfLen=14192
