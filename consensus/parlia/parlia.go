@@ -407,16 +407,42 @@ func (p *Parlia) VerifyHeaders(chain consensus.ChainHeaderReader, headers []*typ
 // Before luban fork: |---Extra Vanity---|---Validators Bytes (or Empty)---|---Extra Seal---|
 // After luban fork:  |---Extra Vanity---|---Validators Number and Validators Bytes (or Empty)---|---Vote Attestation (or Empty)---|---Extra Seal---|
 // After bohr fork:   |---Extra Vanity---|---Validators Number and Validators Bytes (or Empty)---|---Turn Length (or Empty)---|---Vote Attestation (or Empty)---|---Extra Seal---|
+// After VRF fork:    |---Extra Vanity---|---Validators Number and Validators Bytes (or Empty)---|---Turn Length (or Empty)---|---Vote Attestation (or Empty)---|---VRF Proof (or Empty)---|---Extra Seal---|
 func getValidatorBytesFromHeader(header *types.Header, chainConfig *params.ChainConfig, parliaConfig *params.ParliaConfig) []byte {
 	if len(header.Extra) <= extraVanity+extraSeal {
 		return nil
 	}
 
+	// Calculate the end position, excluding signature and VRF proof (if present)
+	// VRF proof format: [vrfLen(2 bytes)][vrfProof(variable)] located right before signature
+	endPos := len(header.Extra) - extraSeal
+
+	// Check if VRF proof is present
+	if len(header.Extra) >= extraVanity+extraSeal+vrfProofLength {
+		vrfLenPos := len(header.Extra) - extraSeal - vrfProofLength
+		if vrfLenPos >= extraVanity {
+			vrfLen := int(header.Extra[vrfLenPos])<<8 | int(header.Extra[vrfLenPos+1])
+			// Verify VRF proof length is reasonable
+			if vrfLen > 0 && vrfLen <= 1024 {
+				vrfProofStart := vrfLenPos + vrfProofLength
+				vrfProofEnd := vrfProofStart + vrfLen
+				// Check if VRF proof structure is valid: [content][vrfLen(2)][vrfProof][signature(65)]
+				if vrfProofEnd+extraSeal == len(header.Extra) && vrfLenPos >= extraVanity {
+					// VRF proof is present, adjust endPos to exclude vrfLen and vrfProof
+					endPos = vrfLenPos
+				}
+			}
+		}
+	}
+
 	if !chainConfig.IsLuban(header.Number) {
-		if header.Number.Uint64()%parliaConfig.Epoch == 0 && (len(header.Extra)-extraSeal-extraVanity)%validatorBytesLengthBeforeLuban != 0 {
+		if header.Number.Uint64()%parliaConfig.Epoch == 0 && (endPos-extraVanity)%validatorBytesLengthBeforeLuban != 0 {
 			return nil
 		}
-		return header.Extra[extraVanity : len(header.Extra)-extraSeal]
+		if endPos <= extraVanity {
+			return nil
+		}
+		return header.Extra[extraVanity:endPos]
 	}
 
 	if header.Number.Uint64()%parliaConfig.Epoch != 0 {
@@ -432,6 +458,10 @@ func getValidatorBytesFromHeader(header *types.Header, chainConfig *params.Chain
 	if num == 0 || len(header.Extra) < extraMinLen {
 		return nil
 	}
+	// Make sure we don't include VRF proof in validators
+	if end > endPos {
+		return nil
+	}
 	return header.Extra[start:end]
 }
 
@@ -445,20 +475,49 @@ func getVoteAttestationFromHeader(header *types.Header, chainConfig *params.Chai
 		return nil, nil
 	}
 
+	// Calculate end position, excluding signature and VRF proof (if present)
+	// VRF proof format: [vrfLen(2 bytes)][vrfProof(variable)] located right before signature
+	endPos := len(header.Extra) - extraSeal
+
+	// Check if VRF proof is present and adjust endPos
+	if len(header.Extra) >= extraVanity+extraSeal+vrfProofLength {
+		vrfLenPos := len(header.Extra) - extraSeal - vrfProofLength
+		if vrfLenPos >= extraVanity {
+			vrfLen := int(header.Extra[vrfLenPos])<<8 | int(header.Extra[vrfLenPos+1])
+			// Verify VRF proof length is reasonable
+			if vrfLen > 0 && vrfLen <= 1024 {
+				vrfProofStart := vrfLenPos + vrfProofLength
+				vrfProofEnd := vrfProofStart + vrfLen
+				// Check if VRF proof structure is valid
+				if vrfProofEnd+extraSeal == len(header.Extra) && vrfLenPos >= extraVanity {
+					// VRF proof is present, adjust endPos to exclude vrfLen and vrfProof
+					endPos = vrfLenPos
+				}
+			}
+		}
+	}
+
 	var attestationBytes []byte
 	if header.Number.Uint64()%parliaConfig.Epoch != 0 {
-		attestationBytes = header.Extra[extraVanity : len(header.Extra)-extraSeal]
+		// Non-epoch block: attestation is between vanity and VRF proof/signature
+		if endPos > extraVanity {
+			attestationBytes = header.Extra[extraVanity:endPos]
+		}
 	} else {
+		// Epoch block: attestation is after validators/turnLength and before VRF proof/signature
 		num := int(header.Extra[extraVanity])
 		start := extraVanity + validatorNumberSize + num*validatorBytesLength
 		if chainConfig.IsBohr(header.Number, header.Time) {
 			start += turnLengthSize
 		}
-		end := len(header.Extra) - extraSeal
-		if end <= start {
+		if endPos <= start {
 			return nil, nil
 		}
-		attestationBytes = header.Extra[start:end]
+		attestationBytes = header.Extra[start:endPos]
+	}
+
+	if len(attestationBytes) == 0 {
+		return nil, nil
 	}
 
 	var attestation types.VoteAttestation
@@ -1665,38 +1724,6 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		return nil
 	}
 
-	// Store VRF proof in Extra field for later verification
-	if vrfProof != nil {
-		vrfProofData := encodeVRFProof(vrfProof)
-		// Insert VRF proof before the signature (last 65 bytes)
-		// Format: [existing extra][vrfProofLength (2 bytes)][vrfProofData][signature (65 bytes)]
-		if len(header.Extra) < extraSeal {
-			return errMissingSignature
-		}
-		// Split: content (without signature) and signature placeholder
-		contentLen := len(header.Extra) - extraSeal
-		content := header.Extra[:contentLen]
-
-		// Encode VRF proof length as 2 bytes (big endian)
-		vrfLen := uint16(len(vrfProofData))
-		vrfLenBytes := []byte{byte(vrfLen >> 8), byte(vrfLen & 0xFF)}
-
-		// Rebuild Extra: [content][vrfLenBytes][vrfProofData][signature placeholder]
-		newExtra := make([]byte, 0, contentLen+vrfProofLength+len(vrfProofData)+extraSeal)
-		newExtra = append(newExtra, content...)
-		newExtra = append(newExtra, vrfLenBytes...)
-		newExtra = append(newExtra, vrfProofData...)
-		newExtra = append(newExtra, header.Extra[contentLen:]...) // Keep signature placeholder
-		header.Extra = newExtra
-
-		log.Info("VRF proof stored in Extra field",
-			"blockNumber", number,
-			"beta", common.Bytes2Hex(vrfProof.Beta),
-			"firstDigit", getFirstHexDigit(vrfProof.Beta),
-			"proofLen", len(vrfProof.Pi),
-			"extraLen", len(header.Extra))
-	}
-
 	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously
 	// Otherwise use the original delay mechanism
 	delay := p.calculateSealDelay(snap, header, parent)
@@ -1717,6 +1744,39 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 			/* If the vote attestation can't be assembled successfully, the blockchain won't get
 			   fast finalized, but it can be tolerated, so just report this error here. */
 			log.Error("Assemble vote attestation failed when sealing", "err", err)
+		}
+
+		// Insert VRF proof after VoteAttestation and before signature
+		// Order: [vanity][validators][turnLength][voteAttestation][vrfProof][signature]
+		if vrfProof != nil {
+			vrfProofData := encodeVRFProof(vrfProof)
+			if len(header.Extra) < extraSeal {
+				log.Error("Missing signature placeholder in header", "extraLen", len(header.Extra))
+				return
+			}
+
+			// Split: content (without signature) and signature placeholder
+			contentLen := len(header.Extra) - extraSeal
+			content := header.Extra[:contentLen]
+
+			// Encode VRF proof length as 2 bytes (big endian)
+			vrfLen := uint16(len(vrfProofData))
+			vrfLenBytes := []byte{byte(vrfLen >> 8), byte(vrfLen & 0xFF)}
+
+			// Rebuild Extra: [content][vrfLenBytes][vrfProofData][signature placeholder]
+			newExtra := make([]byte, 0, contentLen+vrfProofLength+len(vrfProofData)+extraSeal)
+			newExtra = append(newExtra, content...)
+			newExtra = append(newExtra, vrfLenBytes...)
+			newExtra = append(newExtra, vrfProofData...)
+			newExtra = append(newExtra, header.Extra[contentLen:]...) // Keep signature placeholder
+			header.Extra = newExtra
+
+			log.Info("VRF proof stored in Extra field",
+				"blockNumber", number,
+				"beta", common.Bytes2Hex(vrfProof.Beta),
+				"firstDigit", getFirstHexDigit(vrfProof.Beta),
+				"proofLen", len(vrfProof.Pi),
+				"extraLen", len(header.Extra))
 		}
 
 		// Sign all the things!

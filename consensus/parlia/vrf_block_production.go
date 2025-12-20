@@ -374,34 +374,21 @@ func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte
 	)
 
 	// Minimum length check
-	if len(extra) < extraVanity+extraSeal {
+	if len(extra) < extraVanity+extraSeal+vrfProofLength {
 		return nil
 	}
 
-	// Calculate expected length without VRF proof
-	expectedMinLen := extraVanity + extraSeal
+	// VRF proof is located right before the signature (last 65 bytes)
+	// Read VRF length from the position: len(extra) - extraSeal - vrfProofLength
+	vrfLenPos := len(extra) - extraSeal - vrfProofLength
+
+	// Make sure vrfLenPos is after vanity (and validators if epoch)
+	minVrfLenPos := extraVanity
 	if isEpoch {
-		expectedMinLen += len(validatorsBytes)
+		minVrfLenPos = extraVanity + len(validatorsBytes)
 	}
 
-	// If Extra is exactly the expected length, no VRF proof
-	if len(extra) == expectedMinLen {
-		return nil
-	}
-
-	// If Extra is shorter than expected, no VRF proof
-	if len(extra) < expectedMinLen+vrfProofLength {
-		return nil
-	}
-
-	// Calculate start position of VRF proof length
-	vrfLenPos := extraVanity
-	if isEpoch {
-		vrfLenPos = extraVanity + len(validatorsBytes)
-	}
-
-	// Check if there's enough space for VRF proof length + signature
-	if vrfLenPos+vrfProofLength+extraSeal > len(extra) {
+	if vrfLenPos < minVrfLenPos {
 		return nil
 	}
 
@@ -413,9 +400,11 @@ func extractVRFProofFromExtra(extra []byte, isEpoch bool, validatorsBytes []byte
 		return nil
 	}
 
-	// Check if there's enough space for the VRF proof
+	// Calculate VRF proof start position (right after vrfLen)
 	vrfProofStart := vrfLenPos + vrfProofLength
 	vrfProofEnd := vrfProofStart + vrfLen
+
+	// Verify the structure: [content][vrfLen(2)][vrfProof(variable)][signature(65)]
 	if vrfProofEnd+extraSeal != len(extra) {
 		return nil
 	}

@@ -99,7 +99,7 @@ func getVRFBeta(header *types.Header) []byte {
 		return nil // No room for VRF proof
 	}
 
-	// VRF proof length is located before the signature
+	// VRF proof length is located right before the signature
 	vrfLenPos := len(extra) - extraSeal - vrfProofLength
 
 	// Check if position is valid (must be after vanity)
@@ -107,15 +107,17 @@ func getVRFBeta(header *types.Header) []byte {
 		return nil
 	}
 
-	// Read VRF proof length
+	// Read VRF proof length (2 bytes, big endian)
 	vrfLen := int(extra[vrfLenPos])<<8 | int(extra[vrfLenPos+1])
 	if vrfLen == 0 || vrfLen > 1024 {
 		return nil
 	}
 
-	// Calculate VRF proof position
+	// Calculate VRF proof position: [content][vrfLen(2)][vrfProof(variable)][signature(65)]
 	vrfProofStart := vrfLenPos + vrfProofLength
 	vrfProofEnd := vrfProofStart + vrfLen
+
+	// Verify structure
 	if vrfProofEnd+extraSeal != len(extra) {
 		return nil
 	}
