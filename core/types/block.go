@@ -343,6 +343,10 @@ func CopyHeader(h *Header) *Header {
 		cpy.ParentBeaconRoot = new(common.Hash)
 		*cpy.ParentBeaconRoot = *h.ParentBeaconRoot
 	}
+	if len(h.VRFProof) > 0 {
+		cpy.VRFProof = make([]byte, len(h.VRFProof))
+		copy(cpy.VRFProof, h.VRFProof)
+	}
 	return &cpy
 }
 
