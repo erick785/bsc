@@ -1,0 +1,36 @@
+t=12-20|15:18:34.641 lvl=debug msg="Importing propagated block" peer=e415e62afe6162e0eb02e50e62a25fdd18acc3ba4dbfb15e6279420500dddc3c number=10 hash=0xab1045b045bc4229168b68c86608ed18eeeac6d48ca8777773f3613a1d1a4dc3
+t=12-20|15:18:34.642 lvl=debug msg="getValidatorBytesFromHeader called" blockNumber=10 isEpoch=false extraLen=216 isLuban=true
+t=12-20|15:18:34.642 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=149 vrfLen=4835
+t=12-20|15:18:34.642 lvl=debug msg="Non-epoch block after Luban, no validators expected" blockNumber=10
+t=12-20|15:18:34.642 lvl=debug msg="Validator bytes check" blockNumber=10 isEpoch=false signersBytesLen=0 extraLen=216
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x5A7ae634876Fb264f97EaCC24a9261005e9bc39a seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x3aD55d1D552cC55dee90C0faf0335383B2e6C5cE seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x5FDA3Ff6ea581EA7A5a9C2CB310b13c2126b4e8B seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0xbCDD0d2cDA5f6423E57B6a4dCD75DEcbE31aeCf0 seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0xfE02c8ff2374583C47b1d62fdF3E1b72C20eBE29 seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x5e2A531A825d8B61BCc305a35a7433e9A8920f0f seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x511Aa4D222618F8698fEaaB811023Ca4E8Bebfe5 seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x51cb3d0f6b77ef8317b31f4AaEaa75E4cfF3CCa7 seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg=backOffTime blockNumber=10 validator=0x50B947C8643C7694037b29545fbc423951e28442 seenTimes=1
+t=12-20|15:18:34.642 lvl=debug msg="getValidatorBytesFromHeader called" blockNumber=10 isEpoch=false extraLen=216 isLuban=true
+t=12-20|15:18:34.642 lvl=debug msg="Checking VRF proof presence" blockNumber=10 vrfLenPos=149 vrfLen=4835
+t=12-20|15:18:34.642 lvl=debug msg="Non-epoch block after Luban, no validators expected" blockNumber=10
+t=12-20|15:18:34.642 lvl=warn msg="VRF eligibility verification failed" blockNumber=10 coinbase=0xc12cF70a667d541A33bd51C623f8a7024ED8C2fE error="missing VRF proof in Extra field"
+t=12-20|15:18:34.642 lvl=error msg="Propagated block verification failed" peer=e415e62afe6162e0eb02e50e62a25fdd18acc3ba4dbfb15e6279420500dddc3c number=10 hash=0xab1045b045bc4229168b68c86608ed18eeeac6d48ca8777773f3613a1d1a4dc3 err="missing VRF proof in Extra field"
+
+
+
+t=12-20|15:18:34.019 lvl=info msg="Sealing block with" number=10 delay=0s headerDifficulty=1 val=0xc12cF70a667d541A33bd51C623f8a7024ED8C2fE
+t=12-20|15:18:34.019 lvl=info msg="Inserting VRF proof into Extra field" blockNumber=10 extraLenBefore=97 beta=b6c7abefc82efb03c5a2debf688ef1461d0c50b3fabe6eabc76769d9b1f020c5 piLen=81
+t=12-20|15:18:34.019 lvl=debug msg="Extra field breakdown before VRF insertion" blockNumber=10 totalLen=97 contentLen=32 signatureLen=65 vrfProofDataLen=117
+t=12-20|15:18:34.019 lvl=info msg="VRF proof inserted successfully" blockNumber=10 extraLenAfter=216 vrfLen=117 vrfProofDataLen=117 firstDigit=11
+t=12-20|15:18:34.019 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
+t=12-20|15:18:34.019 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
+t=12-20|15:18:34.019 lvl=debug msg="startVote flag is false, continue"
+t=12-20|15:18:34.019 lvl=debug msg="Created new diff layer" id=5 block=10 nodes=16 size="2.75 KiB" root=0x5e442e685543203a11d61266169fa24a4f4a960ada33713a7f73c229e1951987
+t=12-20|15:18:34.019 lvl=debug msg="Add difflayer to hash map" root=0x5e442e685543203a11d61266169fa24a4f4a960ada33713a7f73c229e1951987 block_number=10 map_len=467 add_delta=13
+t=12-20|15:18:34.019 lvl=debug msg="Snapshot updated" blockRoot=0x5e442e685543203a11d61266169fa24a4f4a960ada33713a7f73c229e1951987
+t=12-20|15:18:34.019 lvl=debug msg="Snapshot capped" root=0x5e442e685543203a11d61266169fa24a4f4a960ada33713a7f73c229e1951987
+t=12-20|15:18:34.023 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
+t=12-20|15:18:34.024 lvl=debug msg="once one attestation generated, attestation of snap would not be nil forever basically"
+t=12-20|15:18:34.030 lvl=info msg="Successfully sealed new block" number=10 sealhash=0xc31fcc2bc1051f258786d4a313a7d28407f46098100d87a9037dd0595db73207 hash=0xab1045b045bc4229168b68c86608ed18eeeac6d48ca8777773f3613a1d1a4dc3 elapsed=28.868ms
