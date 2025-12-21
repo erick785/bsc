@@ -587,7 +587,8 @@ func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	// Don't waste time checking blocks from the future
 	if header.Time > uint64(time.Now().Unix()) {
-		log.Warn("Block in the future", "blockNumber", header.Number, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
+		log.Warn("verifyHeader  Block in the future", "blockNumber",
+			header.Number, "Coinbase", header.Coinbase, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		return consensus.ErrFutureBlock
 	}
 	// Check that the extra-data contains the vanity, validators and signature.
@@ -1696,13 +1697,18 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	// Store VRF proof in header for later verification
 	if vrfProof != nil {
 		header.VRFProof = encodeVRFProof(vrfProof)
+
+		// Set difficulty based on VRF beta first digit
+		header.Difficulty = new(big.Int).SetUint64(uint64(getFirstHexDigit(vrfProof.Beta)))
+
 		log.Info("VRF proof stored in header",
 			"blockNumber", number,
 			"beta", common.Bytes2Hex(vrfProof.Beta),
 			"firstDigit", getFirstHexDigit(vrfProof.Beta),
-			"proofLen", len(vrfProof.Pi))
-
-		header.Difficulty = new(big.Int).SetUint64(uint64(getFirstHexDigit(vrfProof.Beta)))
+			"proofLen", len(vrfProof.Pi),
+			"headerTime", header.Time,
+			"parentTime", parent.Time,
+			"difficulty", header.Difficulty)
 	}
 
 	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously

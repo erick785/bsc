@@ -126,6 +126,9 @@ func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint
 		degradeInterval = p.config.Period
 	}
 
+	return baseThreshold
+
+	// todo
 	// Calculate degraded threshold based on time
 	// Each degradeInterval seconds, decrease threshold to allow more validators
 	// Logic: firstDigit > threshold, so lower threshold = more validators eligible
@@ -279,7 +282,7 @@ func decodeVRFProof(data []byte) (*VRFProofData, error) {
 // If VRF is enabled and active, all eligible validators produce blocks at the same time (no backoff)
 // Otherwise, use the traditional in-turn/out-of-turn delay mechanism
 func (p *Parlia) calculateSealDelay(snap *Snapshot, header *types.Header, parent *types.Header) time.Duration {
-	// Legacy mode: use traditional in-turn/out-of-turn delay
+	// VRF logic is already handled in delayForRamanujanFork
 	return p.delayForRamanujanFork(snap, header)
 }
 
