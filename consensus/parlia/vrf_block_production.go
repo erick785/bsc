@@ -279,26 +279,6 @@ func decodeVRFProof(data []byte) (*VRFProofData, error) {
 // If VRF is enabled and active, all eligible validators produce blocks at the same time (no backoff)
 // Otherwise, use the traditional in-turn/out-of-turn delay mechanism
 func (p *Parlia) calculateSealDelay(snap *Snapshot, header *types.Header, parent *types.Header) time.Duration {
-	// Check if VRF is enabled and active for this block
-	blockNumber := header.Number.Uint64()
-	vrfActive := p.config.EnableVRF &&
-		p.config.VRFActivationBlock != nil &&
-		blockNumber >= p.config.VRFActivationBlock.Uint64()
-
-	if vrfActive {
-		// VRF mode: all eligible validators produce blocks at the target time simultaneously
-		// No additional backoff delay needed
-		delay := time.Until(time.Unix(int64(header.Time), 0))
-		if delay < 0 {
-			delay = 0
-		}
-		log.Debug("VRF mode delay calculation",
-			"blockNumber", blockNumber,
-			"headerTime", header.Time,
-			"delay", delay)
-		return delay
-	}
-
 	// Legacy mode: use traditional in-turn/out-of-turn delay
 	return p.delayForRamanujanFork(snap, header)
 }

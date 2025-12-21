@@ -14,6 +14,22 @@ const (
 )
 
 func (p *Parlia) delayForRamanujanFork(snap *Snapshot, header *types.Header) time.Duration {
+	// Check if VRF is enabled and active for this block
+	blockNumber := header.Number.Uint64()
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		// VRF mode: all eligible validators produce blocks at the target time simultaneously
+		// No additional backoff delay needed
+		delay := time.Until(time.Unix(int64(header.Time), 0))
+		if delay < 0 {
+			delay = 0
+		}
+		return delay
+	}
+
 	delay := time.Until(time.Unix(int64(header.Time), 0)) // nolint: gosimple
 	if p.chainConfig.IsRamanujan(header.Number) {
 		return delay
@@ -27,6 +43,17 @@ func (p *Parlia) delayForRamanujanFork(snap *Snapshot, header *types.Header) tim
 }
 
 func (p *Parlia) blockTimeForRamanujanFork(snap *Snapshot, header, parent *types.Header) uint64 {
+
+	// Check if VRF is enabled and active for this block
+	blockNumber := header.Number.Uint64()
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		return parent.Time + p.config.Period
+	}
+
 	blockTime := parent.Time + p.config.Period
 	if p.chainConfig.IsRamanujan(header.Number) {
 		blockTime = blockTime + p.backOffTime(snap, header, p.val)
@@ -36,6 +63,19 @@ func (p *Parlia) blockTimeForRamanujanFork(snap *Snapshot, header, parent *types
 
 func (p *Parlia) blockTimeVerifyForRamanujanFork(snap *Snapshot, header, parent *types.Header) error {
 	if p.chainConfig.IsRamanujan(header.Number) {
+
+		// Check if VRF is enabled and active for this block
+		blockNumber := header.Number.Uint64()
+		vrfActive := p.config.EnableVRF &&
+			p.config.VRFActivationBlock != nil &&
+			blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+		if vrfActive {
+			if header.Time < parent.Time+p.config.Period {
+				return consensus.ErrFutureBlock
+			}
+			return nil
+		}
 		if header.Time < parent.Time+p.config.Period+p.backOffTime(snap, header, header.Coinbase) {
 			return consensus.ErrFutureBlock
 		}

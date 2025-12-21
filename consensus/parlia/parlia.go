@@ -587,6 +587,7 @@ func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	// Don't waste time checking blocks from the future
 	if header.Time > uint64(time.Now().Unix()) {
+		log.Warn("Block in the future", "blockNumber", header.Number, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		return consensus.ErrFutureBlock
 	}
 	// Check that the extra-data contains the vanity, validators and signature.
@@ -1107,8 +1108,11 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	// Set the correct difficulty
-	header.Difficulty = CalcDifficulty(snap, p.val)
+	// In VRF mode, all eligible validators have the same priority
+	// Use a unified difficulty value
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		number >= p.config.VRFActivationBlock.Uint64()
 
 	// Ensure the extra data has all it's components
 	if len(header.Extra) < extraVanity-nextForkHashSize {
@@ -1121,30 +1125,17 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 		return consensus.ErrUnknownAncestor
 	}
 
-	// Check if VRF is active for this block
-	vrfActive := p.config.EnableVRF &&
-		p.config.VRFActivationBlock != nil &&
-		number >= p.config.VRFActivationBlock.Uint64()
-
-	if vrfActive {
-		// VRF mode: all eligible validators produce blocks at the same time
-		// No backoff delay, just parent time + period
-		header.Time = parent.Time + p.config.Period
-		log.Debug("VRF active: setting block time without backoff",
-			"blockNumber", number,
-			"parentTime", parent.Time,
-			"period", p.config.Period,
-			"headerTime", header.Time)
-	} else {
-		// Traditional mode: use in-turn/out-of-turn backoff
-		header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
-		log.Debug("VRF not active: using traditional backoff",
-			"blockNumber", number,
-			"headerTime", header.Time)
-	}
+	header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
 
 	if header.Time < uint64(time.Now().Unix()) {
+		log.Warn("Block in the future", "blockNumber", header.Number, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		header.Time = uint64(time.Now().Unix())
+	}
+
+	if vrfActive {
+		header.Difficulty = new(big.Int).Set(diffNoTurn)
+	} else {
+		header.Difficulty = p.CalcDifficulty(chain, header.Time, parent)
 	}
 
 	header.Extra = header.Extra[:extraVanity-nextForkHashSize]
@@ -1710,6 +1701,8 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 			"beta", common.Bytes2Hex(vrfProof.Beta),
 			"firstDigit", getFirstHexDigit(vrfProof.Beta),
 			"proofLen", len(vrfProof.Pi))
+
+		header.Difficulty = new(big.Int).SetUint64(uint64(getFirstHexDigit(vrfProof.Beta)))
 	}
 
 	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously
@@ -1833,30 +1826,20 @@ func (p *Parlia) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, 
 		return nil
 	}
 
-	// In VRF mode, all eligible validators have the same priority
-	// Use a unified difficulty value
-	blockNumber := parent.Number.Uint64() + 1
-	vrfActive := p.config.EnableVRF &&
-		p.config.VRFActivationBlock != nil &&
-		blockNumber >= p.config.VRFActivationBlock.Uint64()
-
-	if vrfActive {
-		// VRF mode: use diffNoTurn for all validators
-		return new(big.Int).Set(diffNoTurn)
-	}
-
-	return CalcDifficulty(snap, p.val)
-}
-
-// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
-// that a new block should have based on the previous blocks in the chain and the
-// current signer.
-func CalcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
-	if snap.inturn(signer) {
+	if snap.inturn(p.val) {
 		return new(big.Int).Set(diffInTurn)
 	}
 	return new(big.Int).Set(diffNoTurn)
+
+	// return CalcDifficulty(snap, p.val)
 }
+
+// // CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
+// // that a new block should have based on the previous blocks in the chain and the
+// // current signer.
+// func CalcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
+
+// }
 
 func encodeSigHeaderWithoutVoteAttestation(w io.Writer, header *types.Header, chainId *big.Int) {
 	err := rlp.Encode(w, []interface{}{
