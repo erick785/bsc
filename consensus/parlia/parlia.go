@@ -1120,7 +1120,29 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
 	}
-	header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
+
+	// Check if VRF is active for this block
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		number >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		// VRF mode: all eligible validators produce blocks at the same time
+		// No backoff delay, just parent time + period
+		header.Time = parent.Time + p.config.Period
+		log.Debug("VRF active: setting block time without backoff",
+			"blockNumber", number,
+			"parentTime", parent.Time,
+			"period", p.config.Period,
+			"headerTime", header.Time)
+	} else {
+		// Traditional mode: use in-turn/out-of-turn backoff
+		header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
+		log.Debug("VRF not active: using traditional backoff",
+			"blockNumber", number,
+			"headerTime", header.Time)
+	}
+
 	if header.Time < uint64(time.Now().Unix()) {
 		header.Time = uint64(time.Now().Unix())
 	}
