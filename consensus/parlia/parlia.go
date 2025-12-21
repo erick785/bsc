@@ -3,6 +3,7 @@ package parlia
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -240,6 +241,8 @@ type Parlia struct {
 	signFn   SignerFn       // Signer function to authorize hashes with
 	signTxFn SignerTxFn
 
+	privateKey *ecdsa.PrivateKey // Private key for VRF proof generation (optional, for VRF-based block production)
+
 	lock sync.RWMutex // Protects the signer fields
 
 	ethAPI                     *ethapi.BlockChainAPI
@@ -267,6 +270,29 @@ func New(
 	// Set any missing consensus parameters to their defaults
 	if parliaConfig != nil && parliaConfig.Epoch == 0 {
 		parliaConfig.Epoch = defaultEpochLength
+	}
+
+	// Set VRF configuration defaults
+	if parliaConfig != nil {
+
+		parliaConfig.EnableVRF = true
+		parliaConfig.VRFActivationBlock = big.NewInt(10)
+
+		if parliaConfig.VRFBaseThreshold == 0 {
+			parliaConfig.VRFBaseThreshold = 8 // Default: first hex digit < 8
+		}
+		if parliaConfig.VRFDegradeInterval == 0 {
+			parliaConfig.VRFDegradeInterval = parliaConfig.Period
+		}
+		if parliaConfig.VRFMaxThreshold == 0 || parliaConfig.VRFMaxThreshold > 16 {
+			parliaConfig.VRFMaxThreshold = 16 // Default: max threshold (all validators eligible)
+		}
+		log.Info("VRF configuration initialized",
+			"enableVRF", parliaConfig.EnableVRF,
+			"activationBlock", parliaConfig.VRFActivationBlock,
+			"baseThreshold", parliaConfig.VRFBaseThreshold,
+			"degradeInterval", parliaConfig.VRFDegradeInterval,
+			"maxThreshold", parliaConfig.VRFMaxThreshold)
 	}
 
 	// Allocate the snapshot caches and create the engine
@@ -561,6 +587,8 @@ func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	// Don't waste time checking blocks from the future
 	if header.Time > uint64(time.Now().Unix()) {
+		log.Warn("verifyHeader  Block in the future", "blockNumber",
+			header.Number, "Coinbase", header.Coinbase, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		return consensus.ErrFutureBlock
 	}
 	// Check that the extra-data contains the vanity, validators and signature.
@@ -695,6 +723,15 @@ func (p *Parlia) verifyCascadingFields(chain consensus.ChainHeaderReader, header
 
 	if uint64(diff) >= limit || header.GasLimit < params.MinGasLimit {
 		return fmt.Errorf("invalid gas limit: have %d, want %d += %d", header.GasLimit, parent.GasLimit, limit-1)
+	}
+
+	// Verify VRF eligibility for VRF-based block production
+	if err := p.verifyVRFEligibility(header, parent.Time); err != nil {
+		log.Warn("VRF eligibility verification failed",
+			"blockNumber", number,
+			"coinbase", header.Coinbase.Hex(),
+			"error", err)
+		return err
 	}
 
 	// Verify vote attestation for fast finality.
@@ -899,7 +936,12 @@ func (p *Parlia) verifySeal(chain consensus.ChainHeaderReader, header *types.Hea
 	}
 
 	// Ensure that the difficulty corresponds to the turn-ness of the signer
-	if !p.fakeDiff {
+	// In VRF mode, skip difficulty check as all eligible validators produce blocks simultaneously
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		number >= p.config.VRFActivationBlock.Uint64()
+
+	if !p.fakeDiff && !vrfActive {
 		inturn := snap.inturn(signer)
 		if inturn && header.Difficulty.Cmp(diffInTurn) != 0 {
 			return errWrongDifficulty
@@ -1067,8 +1109,11 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 		return err
 	}
 
-	// Set the correct difficulty
-	header.Difficulty = CalcDifficulty(snap, p.val)
+	// In VRF mode, all eligible validators have the same priority
+	// Use a unified difficulty value
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		number >= p.config.VRFActivationBlock.Uint64()
 
 	// Ensure the extra data has all it's components
 	if len(header.Extra) < extraVanity-nextForkHashSize {
@@ -1080,9 +1125,43 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
 	}
+
 	header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
+
 	if header.Time < uint64(time.Now().Unix()) {
+		log.Warn("Prepare Block in the future", "blockNumber", header.Number, "Coinbase", header.Coinbase, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		header.Time = uint64(time.Now().Unix())
+	}
+
+	if vrfActive {
+		// VRF mode: generate VRF proof early to set difficulty based on beta
+		if p.privateKey != nil {
+			vrfProof, err := generateVRFProof(p.privateKey, header.Number)
+			if err == nil {
+				// Set difficulty based on VRF beta first digit
+				firstDigit := getFirstHexDigit(vrfProof.Beta)
+				header.Difficulty = new(big.Int).SetUint64(uint64(firstDigit))
+
+				log.Debug("VRF Prepare: set difficulty from beta",
+					"blockNumber", number,
+					"beta", common.Bytes2Hex(vrfProof.Beta),
+					"firstDigit", firstDigit,
+					"difficulty", header.Difficulty)
+			} else {
+				// Fallback to default if VRF generation fails
+				header.Difficulty = new(big.Int).Set(diffNoTurn)
+				log.Warn("VRF Prepare: failed to generate proof, using default difficulty",
+					"blockNumber", number,
+					"err", err)
+			}
+		} else {
+			// No private key available, use default difficulty
+			header.Difficulty = new(big.Int).Set(diffNoTurn)
+			log.Debug("VRF Prepare: no private key, using default difficulty",
+				"blockNumber", number)
+		}
+	} else {
+		header.Difficulty = p.CalcDifficulty(chain, header.Time, parent)
 	}
 
 	header.Extra = header.Extra[:extraVanity-nextForkHashSize]
@@ -1519,6 +1598,17 @@ func (p *Parlia) Authorize(val common.Address, signFn SignerFn, signTxFn SignerT
 	p.signTxFn = signTxFn
 }
 
+// AuthorizeWithKey authorizes a validator with private key for VRF-based block production
+func (p *Parlia) AuthorizeWithKey(val common.Address, signFn SignerFn, signTxFn SignerTxFn, privateKey *ecdsa.PrivateKey) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	p.val = val
+	p.signFn = signFn
+	p.signTxFn = signTxFn
+	p.privateKey = privateKey
+}
+
 // Argument leftOver is the time reserved for block finalize(calculate root, distribute income...)
 func (p *Parlia) Delay(chain consensus.ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration {
 	number := header.Number.Uint64()
@@ -1567,7 +1657,16 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	// Don't hold the val fields for the entire sealing procedure
 	p.lock.RLock()
 	val, signFn := p.val, p.signFn
+	privateKey := p.privateKey
 	p.lock.RUnlock()
+
+	// Log seal attempt with VRF config info
+	log.Info("Seal called - attempting to produce block",
+		"blockNumber", number,
+		"validator", val.Hex(),
+		"vrfEnabled", p.config.EnableVRF,
+		"vrfActivationBlock", p.config.VRFActivationBlock,
+		"privateKeyAvailable", privateKey != nil)
 
 	snap, err := p.snapshot(chain, number-1, header.ParentHash, nil)
 	if err != nil {
@@ -1585,8 +1684,58 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		return nil
 	}
 
-	// Sweet, the protocol permits us to sign the block, wait for our time
-	delay := p.delayForRamanujanFork(snap, header)
+	// VRF eligibility check (if VRF is enabled)
+	parent := chain.GetHeader(header.ParentHash, number-1)
+	if parent == nil {
+		return consensus.ErrUnknownAncestor
+	}
+
+	// Check VRF eligibility
+	eligible, vrfProof, err := p.checkVRFEligibility(privateKey, header, parent.Time)
+	if err != nil {
+		log.Error("VRF eligibility check error", "blockNumber", number, "err", err)
+		// If VRF check fails due to error, fall back to allowing production
+		// This ensures backward compatibility if private key is not set
+		if privateKey != nil {
+			return err
+		}
+	}
+
+	log.Info("VRF eligibility check result",
+		"blockNumber", number,
+		"validator", val.Hex(),
+		"eligible", eligible,
+		"hasVrfProof", vrfProof != nil,
+		"err", err)
+
+	if !eligible {
+		log.Warn("Validator NOT eligible by VRF - will NOT produce block",
+			"blockNumber", number,
+			"validator", val.Hex())
+		return nil
+	}
+
+	log.Info("Validator IS eligible by VRF - will produce block",
+		"blockNumber", number,
+		"validator", val.Hex())
+
+	// Store VRF proof in header for later verification
+	if vrfProof != nil {
+		header.VRFProof = encodeVRFProof(vrfProof)
+
+		log.Info("VRF proof stored in header",
+			"blockNumber", number,
+			"beta", common.Bytes2Hex(vrfProof.Beta),
+			"firstDigit", getFirstHexDigit(vrfProof.Beta),
+			"proofLen", len(vrfProof.Pi),
+			"headerTime", header.Time,
+			"parentTime", parent.Time,
+			"difficulty", header.Difficulty)
+	}
+
+	// Calculate delay: if VRF is enabled and active, eligible validators produce blocks simultaneously
+	// Otherwise use the original delay mechanism
+	delay := p.calculateSealDelay(snap, header, parent)
 
 	log.Info("Sealing block with", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", val.Hex())
 
@@ -1643,6 +1792,18 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 }
 
 func (p *Parlia) shouldWaitForCurrentBlockProcess(chain consensus.ChainHeaderReader, header *types.Header, snap *Snapshot) bool {
+	// In VRF mode, all eligible validators produce blocks simultaneously
+	// No need to wait for any specific validator
+	blockNumber := header.Number.Uint64()
+	vrfActive := p.config.EnableVRF &&
+		p.config.VRFActivationBlock != nil &&
+		blockNumber >= p.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		return false
+	}
+
+	// Legacy mode: wait for in-turn block to be processed first
 	if header.Difficulty.Cmp(diffInTurn) == 0 {
 		return false
 	}
@@ -1692,18 +1853,21 @@ func (p *Parlia) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, 
 	if err != nil {
 		return nil
 	}
-	return CalcDifficulty(snap, p.val)
-}
 
-// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
-// that a new block should have based on the previous blocks in the chain and the
-// current signer.
-func CalcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
-	if snap.inturn(signer) {
+	if snap.inturn(p.val) {
 		return new(big.Int).Set(diffInTurn)
 	}
 	return new(big.Int).Set(diffNoTurn)
+
+	// return CalcDifficulty(snap, p.val)
 }
+
+// // CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
+// // that a new block should have based on the previous blocks in the chain and the
+// // current signer.
+// func CalcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
+
+// }
 
 func encodeSigHeaderWithoutVoteAttestation(w io.Writer, header *types.Header, chainId *big.Int) {
 	err := rlp.Encode(w, []interface{}{

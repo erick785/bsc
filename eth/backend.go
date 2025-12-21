@@ -18,6 +18,7 @@
 package eth
 
 import (
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"math/big"
@@ -25,6 +26,7 @@ import (
 	"sync"
 
 	"github.com/ethereum/go-ethereum/accounts"
+	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -596,7 +598,33 @@ func (s *Ethereum) StartMining() error {
 				log.Error("Etherbase account unavailable locally", "err", err)
 				return fmt.Errorf("signer missing: %v", err)
 			}
-			parlia.Authorize(eb, wallet.SignData, wallet.SignTx)
+
+			// Try to get private key for VRF-based block production
+			var privateKey *ecdsa.PrivateKey
+			// Find the keystore backend
+			for _, backend := range s.accountManager.Backends(keystore.KeyStoreType) {
+				if ks, ok := backend.(*keystore.KeyStore); ok {
+					// Try to get the unlocked key for VRF
+					if key, err := ks.GetUnlockedKey(eb); err == nil && key != nil {
+						privateKey = key.PrivateKey
+						log.Info("VRF: Private key loaded for block production", "address", eb.Hex())
+						break
+					} else {
+						log.Debug("VRF: Could not load private key from this keystore", "err", err)
+					}
+				}
+			}
+
+			if privateKey == nil {
+				log.Warn("VRF: No unlocked private key available, VRF-based block production will be disabled")
+			}
+
+			// Authorize with or without private key
+			if privateKey != nil {
+				parlia.AuthorizeWithKey(eb, wallet.SignData, wallet.SignTx, privateKey)
+			} else {
+				parlia.Authorize(eb, wallet.SignData, wallet.SignTx)
+			}
 
 			minerInfo := metrics.Get("miner-info")
 			if minerInfo != nil {

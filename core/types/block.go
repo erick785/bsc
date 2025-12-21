@@ -110,6 +110,9 @@ type Header struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
+	// VRFProof contains the VRF proof for probabilistic block production (optional, for Parlia VRF)
+	VRFProof []byte `json:"vrfProof" rlp:"optional"`
+
 	// WithdrawalsHash was added by EIP-4895 and is ignored in legacy headers.
 	WithdrawalsHash *common.Hash `json:"withdrawalsRoot" rlp:"optional"`
 
@@ -339,6 +342,10 @@ func CopyHeader(h *Header) *Header {
 	if h.ParentBeaconRoot != nil {
 		cpy.ParentBeaconRoot = new(common.Hash)
 		*cpy.ParentBeaconRoot = *h.ParentBeaconRoot
+	}
+	if len(h.VRFProof) > 0 {
+		cpy.VRFProof = make([]byte, len(h.VRFProof))
+		copy(cpy.VRFProof, h.VRFProof)
 	}
 	return &cpy
 }

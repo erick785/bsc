@@ -1,6 +1,8 @@
 module github.com/ethereum/go-ethereum
 
-go 1.21
+go 1.24.2
+
+toolchain go1.24.11
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.2.0
@@ -37,6 +39,7 @@ require (
 	github.com/google/gofuzz v1.2.0
 	github.com/google/pprof v0.0.0-20240207164012-fb44976bdcd5
 	github.com/google/uuid v1.5.0
+	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.5.1
 	github.com/graph-gophers/graphql-go v1.3.0
 	github.com/hashicorp/go-bexpr v0.1.10
@@ -67,7 +70,6 @@ require (
 	github.com/shirou/gopsutil v3.21.11+incompatible
 	github.com/status-im/keycard-go v0.2.0
 	github.com/stretchr/testify v1.8.4
-	github.com/supranational/blst v0.3.11
 	github.com/syndtr/goleveldb v1.0.1
 	github.com/tendermint/go-amino v0.14.1
 	github.com/tendermint/iavl v0.12.0
@@ -75,6 +77,7 @@ require (
 	github.com/tidwall/wal v1.1.7
 	github.com/tyler-smith/go-bip39 v1.1.0
 	github.com/urfave/cli/v2 v2.26.0
+	github.com/vechain/go-ecvrf v0.0.0-20251211112124-5d5a3ef70fc9
 	github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4 v1.1.3
 	github.com/willf/bitset v1.1.3
 	go.uber.org/automaxprocs v1.5.2
@@ -122,7 +125,7 @@ require (
 	github.com/cosmos/gogoproto v1.4.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.3 // indirect
 	github.com/davidlazar/go-crypto v0.0.0-20200604182044-b73af7476f6c // indirect
-	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.2.0 // indirect
+	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/deepmap/oapi-codegen v1.8.2 // indirect
 	github.com/dgraph-io/ristretto v0.0.4-0.20210318174700-74754f61e018 // indirect
 	github.com/dlclark/regexp2 v1.7.0 // indirect
@@ -152,7 +155,6 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
-	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-middleware v1.3.0 // indirect
 	github.com/grpc-ecosystem/go-grpc-prometheus v1.2.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.0.1 // indirect
@@ -248,6 +250,7 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/spf13/afero v1.10.0 // indirect
+	github.com/supranational/blst v0.3.14 // indirect
 	github.com/tecbot/gorocksdb v0.0.0-20191217155057-f0fad39f321c // indirect
 	github.com/thomaso-mirodin/intmath v0.0.0-20160323211736-5dc6d854e46e // indirect
 	github.com/tidwall/gjson v1.10.2 // indirect

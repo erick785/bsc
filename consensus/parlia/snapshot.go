@@ -254,6 +254,14 @@ func (s *Snapshot) signRecentlyByCounts(validator common.Address, counts map[com
 }
 
 func (s *Snapshot) SignRecently(validator common.Address) bool {
+	vrfActive := s.config.EnableVRF &&
+		s.config.VRFActivationBlock != nil &&
+		s.Number >= s.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		return false
+	}
+
 	return s.signRecentlyByCounts(validator, s.countRecents())
 }
 
@@ -312,7 +320,7 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		snap.RecentForkHashes[number] = hex.EncodeToString(header.Extra[extraVanity-nextForkHashSize : extraVanity])
 		snap.updateAttestation(header, chainConfig, s.config)
 		// change validator set
-		if number > 0 && number%s.config.Epoch == snap.minerHistoryCheckLen() {
+		if number > 10 && number%s.config.Epoch == snap.minerHistoryCheckLen() {
 			epochKey := math.MaxUint64 - header.Number.Uint64()/s.config.Epoch // impossible used as a block number
 			if chainConfig.IsBohr(header.Number, header.Time) {
 				// after switching the validator set, snap.Validators may become larger,
