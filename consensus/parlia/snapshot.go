@@ -210,12 +210,12 @@ func (s *Snapshot) updateAttestation(header *types.Header, chainConfig *params.C
 	// Two scenarios for s.Attestation being nil:
 	// 1) The first attestation is assembled.
 	// 2) The snapshot on disk is missing, prompting the creation of a new snapshot using `newSnapshot`.
-	if s.Attestation != nil && attestation.Data.SourceNumber+1 != attestation.Data.TargetNumber {
-		s.Attestation.TargetNumber = attestation.Data.TargetNumber
-		s.Attestation.TargetHash = attestation.Data.TargetHash
-	} else {
-		s.Attestation = attestation.Data
-	}
+	// if s.Attestation != nil && attestation.Data.SourceNumber+1 != attestation.Data.TargetNumber {
+	// 	s.Attestation.TargetNumber = attestation.Data.TargetNumber
+	// 	s.Attestation.TargetHash = attestation.Data.TargetHash
+	// } else {
+	s.Attestation = attestation.Data
+	//}
 }
 
 func (s *Snapshot) versionHistoryCheckLen() uint64 {
