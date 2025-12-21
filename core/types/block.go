@@ -110,6 +110,9 @@ type Header struct {
 	// BaseFee was added by EIP-1559 and is ignored in legacy headers.
 	BaseFee *big.Int `json:"baseFeePerGas" rlp:"optional"`
 
+	// VRFProof contains the VRF proof for probabilistic block production (optional, for Parlia VRF)
+	VRFProof []byte `json:"vrfProof" rlp:"optional"`
+
 	// WithdrawalsHash was added by EIP-4895 and is ignored in legacy headers.
 	WithdrawalsHash *common.Hash `json:"withdrawalsRoot" rlp:"optional"`
 
@@ -121,9 +124,6 @@ type Header struct {
 
 	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
 	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
-
-	// VRFProof contains the VRF proof for probabilistic block production (optional, for Parlia VRF)
-	VRFProof []byte `json:"vrfProof" rlp:"optional"`
 }
 
 // field type overrides for gencodec

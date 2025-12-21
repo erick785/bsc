@@ -276,7 +276,7 @@ func New(
 	if parliaConfig != nil {
 
 		parliaConfig.EnableVRF = true
-		parliaConfig.VRFActivationBlock = big.NewInt(1)
+		parliaConfig.VRFActivationBlock = big.NewInt(10)
 
 		if parliaConfig.VRFBaseThreshold == 0 {
 			parliaConfig.VRFBaseThreshold = 8 // Default: first hex digit < 8
