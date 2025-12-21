@@ -345,13 +345,13 @@ func createPorts(ipStr string, port int, size int) []int {
 func createNodeConfig(baseConfig gethConfig, enodes []*enode.Node, ip string, port int, size int, i int) gethConfig {
 	baseConfig.Node.HTTPHost = ip
 	baseConfig.Node.P2P.ListenAddr = fmt.Sprintf(":%d", port)
-	baseConfig.Node.P2P.BootstrapNodes = make([]*enode.Node, size-1)
+	baseConfig.Node.P2P.StaticNodes = make([]*enode.Node, size-1)
 	// Set the P2P connections between this node and the other nodes
 	for j := 0; j < i; j++ {
-		baseConfig.Node.P2P.BootstrapNodes[j] = enodes[j]
+		baseConfig.Node.P2P.StaticNodes[j] = enodes[j]
 	}
 	for j := i + 1; j < size; j++ {
-		baseConfig.Node.P2P.BootstrapNodes[j-1] = enodes[j]
+		baseConfig.Node.P2P.StaticNodes[j-1] = enodes[j]
 	}
 	return baseConfig
 }
@@ -371,10 +371,31 @@ func createNodeConfigs(baseConfig gethConfig, initDir string, ips []string, port
 		enodes[i] = enode.NewV4(&pk.PublicKey, net.ParseIP(ips[i]), ports[i], ports[i])
 	}
 
+	// 作恶节点
+	nodes := []int{13, 14, 16, 10, 9, 11}
+	//nodes := []int{2, 0}
+
+	contain := func(nodes []int, i int) bool {
+		for _, v := range nodes {
+			if v == i {
+				return true
+			}
+		}
+		return false
+	}
+
+	StaticNodes := make([]*enode.Node, len(nodes))
+	for i, v := range nodes {
+		StaticNodes[i] = enodes[v]
+	}
+
 	// Create the configs
 	configs := make([]gethConfig, size)
 	for i := 0; i < size; i++ {
 		configs[i] = createNodeConfig(baseConfig, enodes, ips[i], ports[i], size, i)
+		if !contain(nodes, i) {
+			configs[i].Node.P2P.StaticNodes = StaticNodes
+		}
 	}
 	return configs, nil
 }
