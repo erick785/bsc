@@ -254,6 +254,14 @@ func (s *Snapshot) signRecentlyByCounts(validator common.Address, counts map[com
 }
 
 func (s *Snapshot) SignRecently(validator common.Address) bool {
+	vrfActive := s.config.EnableVRF &&
+		s.config.VRFActivationBlock != nil &&
+		s.Number >= s.config.VRFActivationBlock.Uint64()
+
+	if vrfActive {
+		return false
+	}
+
 	return s.signRecentlyByCounts(validator, s.countRecents())
 }
 
