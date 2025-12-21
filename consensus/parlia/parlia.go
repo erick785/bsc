@@ -1129,12 +1129,37 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	header.Time = p.blockTimeForRamanujanFork(snap, header, parent)
 
 	if header.Time < uint64(time.Now().Unix()) {
-		log.Warn("Block in the future", "blockNumber", header.Number, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
+		log.Warn("Prepare Block in the future", "blockNumber", header.Number, "Coinbase", header.Coinbase, "hash", header.Hash(), "time", header.Time, "now", time.Now().Unix())
 		header.Time = uint64(time.Now().Unix())
 	}
 
 	if vrfActive {
-		header.Difficulty = new(big.Int).Set(diffNoTurn)
+		// VRF mode: generate VRF proof early to set difficulty based on beta
+		if p.privateKey != nil {
+			vrfProof, err := generateVRFProof(p.privateKey, header.Number)
+			if err == nil {
+				// Set difficulty based on VRF beta first digit
+				firstDigit := getFirstHexDigit(vrfProof.Beta)
+				header.Difficulty = new(big.Int).SetUint64(uint64(firstDigit))
+
+				log.Debug("VRF Prepare: set difficulty from beta",
+					"blockNumber", number,
+					"beta", common.Bytes2Hex(vrfProof.Beta),
+					"firstDigit", firstDigit,
+					"difficulty", header.Difficulty)
+			} else {
+				// Fallback to default if VRF generation fails
+				header.Difficulty = new(big.Int).Set(diffNoTurn)
+				log.Warn("VRF Prepare: failed to generate proof, using default difficulty",
+					"blockNumber", number,
+					"err", err)
+			}
+		} else {
+			// No private key available, use default difficulty
+			header.Difficulty = new(big.Int).Set(diffNoTurn)
+			log.Debug("VRF Prepare: no private key, using default difficulty",
+				"blockNumber", number)
+		}
 	} else {
 		header.Difficulty = p.CalcDifficulty(chain, header.Time, parent)
 	}
@@ -1697,9 +1722,6 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	// Store VRF proof in header for later verification
 	if vrfProof != nil {
 		header.VRFProof = encodeVRFProof(vrfProof)
-
-		// Set difficulty based on VRF beta first digit
-		header.Difficulty = new(big.Int).SetUint64(uint64(getFirstHexDigit(vrfProof.Beta)))
 
 		log.Info("VRF proof stored in header",
 			"blockNumber", number,
