@@ -1618,7 +1618,16 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	// Don't hold the val fields for the entire sealing procedure
 	p.lock.RLock()
 	val, signFn := p.val, p.signFn
+	privateKey := p.privateKey
 	p.lock.RUnlock()
+
+	// Log seal attempt with VRF config info
+	log.Info("Seal called - attempting to produce block",
+		"blockNumber", number,
+		"validator", val.Hex(),
+		"vrfEnabled", p.config.EnableVRF,
+		"vrfActivationBlock", p.config.VRFActivationBlock,
+		"privateKeyAvailable", privateKey != nil)
 
 	snap, err := p.snapshot(chain, number-1, header.ParentHash, nil)
 	if err != nil {
@@ -1643,10 +1652,6 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	}
 
 	// Check VRF eligibility
-	p.lock.RLock()
-	privateKey := p.privateKey
-	p.lock.RUnlock()
-
 	eligible, vrfProof, err := p.checkVRFEligibility(privateKey, header, parent.Time)
 	if err != nil {
 		log.Error("VRF eligibility check error", "blockNumber", number, "err", err)
@@ -1657,12 +1662,23 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		}
 	}
 
+	log.Info("VRF eligibility check result",
+		"blockNumber", number,
+		"validator", val.Hex(),
+		"eligible", eligible,
+		"hasVrfProof", vrfProof != nil,
+		"err", err)
+
 	if !eligible {
-		log.Info("Not eligible to produce block by VRF",
+		log.Warn("Validator NOT eligible by VRF - will NOT produce block",
 			"blockNumber", number,
 			"validator", val.Hex())
 		return nil
 	}
+
+	log.Info("Validator IS eligible by VRF - will produce block",
+		"blockNumber", number,
+		"validator", val.Hex())
 
 	// Store VRF proof in header for later verification
 	if vrfProof != nil {

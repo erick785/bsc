@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -157,16 +158,27 @@ func min(a, b uint8) uint8 {
 
 // checkVRFEligibility checks if a validator is eligible to produce a block based on VRF
 func (p *Parlia) checkVRFEligibility(privateKey *ecdsa.PrivateKey, header *types.Header, parentTime uint64) (bool, *VRFProofData, error) {
+	blockNumber := header.Number.Uint64()
+
 	// If VRF is not enabled, all validators are eligible
 	if !p.config.EnableVRF {
+		log.Debug("VRF not enabled, validator eligible by default",
+			"blockNumber", blockNumber)
 		return true, nil, nil
 	}
 
 	// Before VRF activation block, all validators are eligible
-	blockNumber := header.Number.Uint64()
 	if p.config.VRFActivationBlock == nil || blockNumber < p.config.VRFActivationBlock.Uint64() {
+		log.Info("VRF not yet activated, validator eligible by default",
+			"blockNumber", blockNumber,
+			"vrfActivationBlock", p.config.VRFActivationBlock)
 		return true, nil, nil
 	}
+
+	log.Info("VRF IS ACTIVE - checking eligibility",
+		"blockNumber", blockNumber,
+		"vrfActivationBlock", p.config.VRFActivationBlock,
+		"hasPrivateKey", privateKey != nil)
 
 	// Generate VRF proof
 	vrfProof, err := generateVRFProof(privateKey, header.Number)
@@ -186,19 +198,21 @@ func (p *Parlia) checkVRFEligibility(privateKey *ecdsa.PrivateKey, header *types
 	eligible := firstDigit > threshold
 
 	if eligible {
-		log.Info("VRF eligibility check passed",
+		log.Warn("✅ VRF ELIGIBLE - Validator CAN produce block",
 			"blockNumber", blockNumber,
 			"beta", common.Bytes2Hex(vrfProof.Beta),
 			"firstDigit", firstDigit,
 			"threshold", threshold,
-			"timeSinceParent", timeSinceParent)
+			"timeSinceParent", timeSinceParent,
+			"condition", fmt.Sprintf("%d > %d", firstDigit, threshold))
 	} else {
-		log.Debug("VRF eligibility check failed",
+		log.Warn("❌ VRF NOT ELIGIBLE - Validator CANNOT produce block",
 			"blockNumber", blockNumber,
 			"beta", common.Bytes2Hex(vrfProof.Beta),
 			"firstDigit", firstDigit,
 			"threshold", threshold,
-			"timeSinceParent", timeSinceParent)
+			"timeSinceParent", timeSinceParent,
+			"condition", fmt.Sprintf("%d > %d is FALSE", firstDigit, threshold))
 	}
 
 	return eligible, vrfProof, nil
