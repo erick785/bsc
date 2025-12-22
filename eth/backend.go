@@ -185,6 +185,10 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	chainConfig.Parlia.Period = 4
+	//chainConfig.Parlia.Epoch = 20
+
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides
 	if config.OverridePassedForkTime != nil {
@@ -333,7 +337,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := cacheConfig.TrieCleanLimit + cacheConfig.TrieDirtyLimit + cacheConfig.SnapshotLimit
-	if eth.handler, err = newHandler(&handlerConfig{
+	if eth.handler, err = newHandler(eth.etherbase, eth.engine, &handlerConfig{
 		Database:               chainDb,
 		Chain:                  eth.blockchain,
 		TxPool:                 eth.txPool,
@@ -378,7 +382,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			blsPasswordPath := stack.ResolvePath(conf.BLSPasswordFile)
 			blsWalletPath := stack.ResolvePath(conf.BLSWalletDir)
 			voteJournalPath := stack.ResolvePath(conf.VoteJournalDir)
-			if _, err := vote.NewVoteManager(eth, eth.blockchain, votePool, voteJournalPath, blsPasswordPath, blsWalletPath, posa); err != nil {
+			if _, err := vote.NewVoteManager(eth.etherbase, eth, eth.blockchain, votePool, voteJournalPath, blsPasswordPath, blsWalletPath, posa); err != nil {
 				log.Error("Failed to Initialize voteManager", "err", err)
 				return nil, err
 			}

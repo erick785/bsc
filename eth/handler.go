@@ -28,6 +28,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
+	"github.com/ethereum/go-ethereum/consensus/parlia"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/core/monitor"
@@ -56,7 +57,7 @@ const (
 	voteChanSize = 256
 
 	// deltaTdThreshold is the threshold of TD difference for peers to broadcast votes.
-	deltaTdThreshold = 20
+	deltaTdThreshold = 1024
 
 	// txMaxBroadcastSize is the max size of a transaction that will be broadcasted.
 	// All transactions with a higher size will be announced and need to be fetched
@@ -150,6 +151,7 @@ type handler struct {
 	txFetcher    *fetcher.TxFetcher
 	peers        *peerSet
 	merger       *consensus.Merger
+	engine       consensus.Engine
 
 	eventMux       *event.TypeMux
 	txsCh          chan core.NewTxsEvent
@@ -172,10 +174,11 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+	val            common.Address
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
-func newHandler(config *handlerConfig) (*handler, error) {
+func newHandler(val common.Address, engine consensus.Engine, config *handlerConfig) (*handler, error) {
 	// Create the protocol manager with the base fields
 	if config.EventMux == nil {
 		config.EventMux = new(event.TypeMux) // Nicety initialization for tests
@@ -201,6 +204,8 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		handlerDoneCh:          make(chan struct{}),
 		handlerStartCh:         make(chan struct{}),
 		stopCh:                 make(chan struct{}),
+		val:                    val,
+		engine:                 engine,
 	}
 	if config.Sync == downloader.FullSync {
 		// The database seems empty as the current block is the genesis. Yet the snap
@@ -776,6 +781,61 @@ func (h *handler) Stop() {
 	log.Info("Ethereum protocol stopped")
 }
 
+var validators = map[string]bool{
+	"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": true,
+	"0x50b947c8643c7694037b29545fbc423951e28442": true,
+	"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": true,
+	"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": true,
+	"0xabb28e397ae478366271806b4851d81a678e404b": true,
+	"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true,
+}
+
+// Node 0: 9f91673ebbc1851f931455c14fe6390c9477d5c0b5a0ab44ff07a5d2f533bb9e
+// Node 1: 89e90304b7d84d2396a0db628c6311b1051b528a9e2e8e214ce13f9502f1a05d
+// Node 2: c055fbf4deef68ab511de05154f4415b3d93f96b4ac55d8fd06d6bbf30ca4ea1
+// Node 3: fefe0044d84fa6179c329087968e62bb26f04d2b317344de221e379cf4220ecc
+// Node 4: 4a5ff76c649ea0ce00cffb65f1509ea76b94a48c73e7060f0908d60ac6222368
+// Node 5: 73fe8072432096f809ac0719cd93d3dcd70d0a5ba5aaa6940ce9d86df220f251
+// Node 6: f291b202160c9e8e56c7bd86d5411076a2268cffefc55d3c30a7fcd97aaa20f6
+// Node 7: b8a3e3a3d21fbdc86d6eae456c4c9acde51b426146156f10ec8b1a391b979ffc
+// Node 8: c503518590e6507d8ed99c742db712efe77652fc3ee4fa36d0a4cf2237d7dbab
+// Node 9: e4c00c946476729419a49f83c27b916b254dbba155a372bf9c31be27728d32f9
+// Node 10: 328c3b22adf355eb7346395c71ef3a55dad7a5be1b3f147768554cb4dc506c81
+// Node 11: e415e62afe6162e0eb02e50e62a25fdd18acc3ba4dbfb15e6279420500dddc3c
+// Node 12: 24f58905eb4563bcaa307d8c63da3ebbd862ddeaf4e42fe9383993177529d4c4
+// Node 13: 78bf3115c505c7e52373a0724397c043b23d33cfe17577f8b856899bed6526d7
+// Node 14: a967c80f8aac15196308af6676a01a0d09b22ea8b33e6ecff54d4d690ad35cc1
+// Node 15: 557de0abfbf8661c8a756ccfcc1537f80d1274baf83fe470c3ab6c913e92fed2
+// Node 16: b52c512ef52b76db48665aa3fd75f3edf5da5b3c705706184e39a725718125ad
+// Node 17: 1587e7ff477cb3a8946c41bba115ef405a4f34310dc1ca123e78a9889d88999d
+// Node 18: e24af340c044a8df2f3adb3a864bba8621f6ff677da7ce8b6e2c08ce0b3189c5
+// Node 19: 08302440e4dfc79cd36804be7a90560ce4be0154b9aeb6f61db19f128aa30f5e
+// Node 20: 78430d91e5427a9dabc3288c0d8eb413ddcd349876d18e1c9f445f1a4035185f
+
+var nodes = map[string]string{
+	"0x20be3a44b2ae6be29acf84ed63afe60b09179cdc": "78bf3115c505c7e52373a0724397c043b23d33cfe17577f8b856899bed6526d7", // 13
+	"0x297e5ebba75bbb67de013eb3d319dd0a2a9861e9": "78430d91e5427a9dabc3288c0d8eb413ddcd349876d18e1c9f445f1a4035185f", // 20
+	"0x3ad55d1d552cc55dee90c0faf0335383b2e6c5ce": "fefe0044d84fa6179c329087968e62bb26f04d2b317344de221e379cf4220ecc", // 3
+	"0x50b947c8643c7694037b29545fbc423951e28442": "a967c80f8aac15196308af6676a01a0d09b22ea8b33e6ecff54d4d690ad35cc1", // 14
+	"0x511aa4d222618f8698feaab811023ca4e8bebfe5": "1587e7ff477cb3a8946c41bba115ef405a4f34310dc1ca123e78a9889d88999d", // 17
+	"0x51cb3d0f6b77ef8317b31f4aaeaa75e4cff3cca7": "c503518590e6507d8ed99c742db712efe77652fc3ee4fa36d0a4cf2237d7dbab", // 8
+	"0x5a7ae634876fb264f97eacc24a9261005e9bc39a": "b52c512ef52b76db48665aa3fd75f3edf5da5b3c705706184e39a725718125ad", // 16
+	"0x5e2a531a825d8b61bcc305a35a7433e9a8920f0f": "c055fbf4deef68ab511de05154f4415b3d93f96b4ac55d8fd06d6bbf30ca4ea1", // 2
+	"0x5fda3ff6ea581ea7a5a9c2cb310b13c2126b4e8b": "f291b202160c9e8e56c7bd86d5411076a2268cffefc55d3c30a7fcd97aaa20f6", // 6
+	"0x6c73f4f3295f83ce342e4a82e8a50d218442451b": "328c3b22adf355eb7346395c71ef3a55dad7a5be1b3f147768554cb4dc506c81", // 10
+	"0x9b50a300da0cd7e036ec2cc12418756ec07004bd": "08302440e4dfc79cd36804be7a90560ce4be0154b9aeb6f61db19f128aa30f5e", // 19
+	"0xa8938f397823afcaa252bb7df137d39396456983": "557de0abfbf8661c8a756ccfcc1537f80d1274baf83fe470c3ab6c913e92fed2", // 15
+	"0xabb28e397ae478366271806b4851d81a678e404b": "e4c00c946476729419a49f83c27b916b254dbba155a372bf9c31be27728d32f9", // 9
+	"0xbbd1acc20bd8304309d31d8fd235210d0efc049d": "89e90304b7d84d2396a0db628c6311b1051b528a9e2e8e214ce13f9502f1a05d", // 1
+	"0xbcdd0d2cda5f6423e57b6a4dcd75decbe31aecf0": "9f91673ebbc1851f931455c14fe6390c9477d5c0b5a0ab44ff07a5d2f533bb9e", // 0
+	"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": "e415e62afe6162e0eb02e50e62a25fdd18acc3ba4dbfb15e6279420500dddc3c", // 11
+	"0xd2d3139575c2824d793d1664c2e1aaeecade11c0": "24f58905eb4563bcaa307d8c63da3ebbd862ddeaf4e42fe9383993177529d4c4", // 12
+	"0xd30d79639bc9c4ed71031bce28216862b80f4b6b": "b8a3e3a3d21fbdc86d6eae456c4c9acde51b426146156f10ec8b1a391b979ffc", // 7
+	"0xe9693a85e563485da999b7d378d60483e89caa0e": "e24af340c044a8df2f3adb3a864bba8621f6ff677da7ce8b6e2c08ce0b3189c5", // 18
+	"0xf7698afa5461438ff438c2322d6d29a5f7abdffd": "73fe8072432096f809ac0719cd93d3dcd70d0a5ba5aaa6940ce9d86df220f251", // 5
+	"0xfe02c8ff2374583c47b1d62fdf3e1b72c20ebe29": "4a5ff76c649ea0ce00cffb65f1509ea76b94a48c73e7060f0908d60ac6222368", // 4
+}
+
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
 func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
@@ -793,38 +853,86 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	hash := block.Hash()
 	peers := h.peers.peersWithoutBlock(hash)
 
-	// If propagation is requested, send to a subset of the peer
-	if propagate {
-		// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
-		var td *big.Int
-		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
-			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
-		} else {
-			log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
+	broadcastBlockfn := func(block *types.Block, propagate bool) {
+		//headerTime := time.Unix(int64(block.Header().Time), 0).Format("2006-01-02 15:04:05")
+		if propagate {
+			// Calculate the TD of the block (it's not imported yet, so block.Td is not valid)
+			var td *big.Int
+			if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
+				td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
+			} else {
+				log.Error("Propagating dangling block", "number", block.Number(), "hash", hash)
+				return
+			}
+			// Send the block to a subset of our peers
+			var transfer []*ethPeer
+			if h.directBroadcast {
+				transfer = peers[:]
+			} else {
+				transfer = peers[:int(math.Sqrt(float64(len(peers))))]
+			}
+
+			for _, peer := range transfer {
+				peer.AsyncSendNewBlock(block, td)
+			}
+
+			//log.Info("Propagated block", "number", block.Number(), "diff", block.Difficulty(), "headrTime", headerTime, "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 			return
 		}
-		// Send the block to a subset of our peers
-		var transfer []*ethPeer
-		if h.directBroadcast {
-			transfer = peers[:]
-		} else {
-			transfer = peers[:int(math.Sqrt(float64(len(peers))))]
+		// Otherwise if the block is indeed in our own chain, announce it
+		if h.chain.HasBlock(hash, block.NumberU64()) {
+			for _, peer := range peers {
+				peer.AsyncSendNewBlockHash(block)
+			}
+			//log.Info("Announced block", "number", block.Number(), "diff", block.Difficulty(), "headrTime", headerTime, "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
 		}
 
-		for _, peer := range transfer {
-			peer.AsyncSendNewBlock(block, td)
-		}
+	}
 
-		log.Trace("Propagated block", "hash", hash, "recipients", len(transfer), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
-		return
+	if validators[strings.ToLower(h.val.Hex())] && block.NumberU64() > 250 {
+		go func() {
+			var delay time.Duration
+			if validators[strings.ToLower(block.Coinbase().Hex())] && block.Difficulty().Int64() == 2 {
+				delay = 40 * time.Millisecond
+				log.Info("Delay block attack 2", "number", block.Number(), "diff", block.Difficulty())
+
+				p, ok := h.engine.(*parlia.Parlia)
+				if ok {
+					bakcupNodes, err := p.GetBackupNode(h.chain, block.Header())
+					if err != nil {
+						log.Error("GetBackupNode", "err", err)
+						return
+					}
+
+					for _, nodeAddr := range bakcupNodes {
+						if nodeAddr.String() == block.Coinbase().String() {
+							continue
+						}
+
+						peer := h.peers.peer(nodes[strings.ToLower(nodeAddr.Hex())])
+						if peer != nil {
+							log.Info("Send block to backup node", "number", block.Number(), "diff", block.Difficulty(), "node", nodeAddr.Hex(), "peer", peer.ID())
+							peer.AsyncSendNewBlock(block, block.Difficulty())
+						}
+					}
+
+				}
+
+				disTime := block.Header().Time + 3
+
+				waitTime := time.Until(time.Unix(int64(disTime), 0)) - delay
+				log.Info("Wait for a while", "number", block.Number(), "waitTime", waitTime)
+				if waitTime > 0 {
+					time.Sleep(waitTime)
+				}
+			}
+
+			broadcastBlockfn(block, propagate)
+		}()
+	} else {
+		broadcastBlockfn(block, propagate)
 	}
-	// Otherwise if the block is indeed in our own chain, announce it
-	if h.chain.HasBlock(hash, block.NumberU64()) {
-		for _, peer := range peers {
-			peer.AsyncSendNewBlockHash(block)
-		}
-		log.Trace("Announced block", "hash", hash, "recipients", len(peers), "duration", common.PrettyDuration(time.Since(block.ReceivedAt)))
-	}
+
 }
 
 // BroadcastTransactions will propagate a batch of transactions
