@@ -2680,7 +2680,7 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Block) error {
 		blockReorgDropMeter.Mark(int64(len(oldChain)))
 		blockReorgMeter.Mark(1)
 
-		bc.highestVerifiedBlockFeed.Send(HighestVerifiedBlockEvent{Header: newChain[0].Header()})
+		// bc.highestVerifiedBlockFeed.Send(HighestVerifiedBlockEvent{Header: newChain[0].Header()})
 
 	} else if len(newChain) > 0 {
 		// Special case happens in the post merge stage that current head is
@@ -2688,7 +2688,7 @@ func (bc *BlockChain) reorg(oldHead *types.Header, newHead *types.Block) error {
 		log.Info("Extend chain", "add", len(newChain), "number", newChain[0].Number(), "hash", newChain[0].Hash())
 		blockReorgAddMeter.Mark(int64(len(newChain)))
 
-		bc.highestVerifiedBlockFeed.Send(HighestVerifiedBlockEvent{Header: newChain[0].Header()})
+		// bc.highestVerifiedBlockFeed.Send(HighestVerifiedBlockEvent{Header: newChain[0].Header()})
 
 	} else {
 		// len(newChain) == 0 && len(oldChain) > 0

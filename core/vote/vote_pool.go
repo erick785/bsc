@@ -136,6 +136,7 @@ func (pool *VotePool) putIntoVotePool(vote *types.VoteEnvelope) bool {
 	isFutureVote := false
 
 	voteBlock := pool.chain.GetVerifiedBlockByHash(targetHash)
+	log.Debug("voteBlock GetVerifiedBlockByHash", "targetHash", targetHash, "targetNumber", targetNumber, "voteBlock", voteBlock)
 	if voteBlock == nil {
 		votes = pool.futureVotes
 		votesPq = pool.futureVotesPq
@@ -147,12 +148,14 @@ func (pool *VotePool) putIntoVotePool(vote *types.VoteEnvelope) bool {
 
 	voteHash := vote.Hash()
 	if ok := pool.basicVerify(vote, headNumber, votes, isFutureVote, voteHash); !ok {
+		log.Debug("basicVerify failed", "voteHash", voteHash)
 		return false
 	}
 
 	if !isFutureVote {
 		// Verify if the vote comes from valid validators based on voteAddress (BLSPublicKey), only verify curVotes here, will verify futureVotes in transfer process.
-		if pool.engine.VerifyVote(pool.chain, vote) != nil {
+		if err := pool.engine.VerifyVote(pool.chain, vote); err != nil {
+			log.Error("VerifyVote failed", "voteHash", voteHash, "err", err)
 			return false
 		}
 
