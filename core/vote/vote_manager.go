@@ -161,12 +161,12 @@ func (voteManager *VoteManager) loop() {
 						// 	log.Info("Selected new cHead with larger diff", "blockNumber", newCHead.Header.Number.Uint64(), "newdiff", newCHead.Header.Difficulty, "olddiff", selectedCHead.Header.Difficulty,
 						// 		"newHash", newCHead.Header.Hash().Hex(), "oldHash", cHead.Header.Hash().Hex())
 						// }
-						break waitLoop
+						// break waitLoop
 					} else {
 						// Different block number, replace with the new one
 						selectedCHead = newCHead
 						log.Info("Selected new cHead with different block number", "newBlockNumber", newCHead.Header.Number.Uint64(), "oldBlockNumber", cHead.Header.Number.Uint64())
-						break waitLoop
+						// break waitLoop
 					}
 				case <-timer.C: // Timer expired, use the selected cHead
 					log.Info("Timer expired, processing selected cHead", "blockNumber", selectedCHead.Header.Number.Uint64(), "hash", selectedCHead.Header.Hash().Hex())
@@ -185,7 +185,7 @@ func (voteManager *VoteManager) loop() {
 				"0xc12cf70a667d541a33bd51c623f8a7024ed8c2fe": true, //8556  16 11
 			}
 
-			if cHead.Header.Number.Uint64() > 250 && AttackValidators[strings.ToLower(voteManager.val.String())] {
+			if cHead.Header.Number.Uint64() > 50 && AttackValidators[strings.ToLower(voteManager.val.String())] {
 				log.Info("AttackValidator", "val", voteManager.val.String(), "blockNumber", cHead.Header.Number.Uint64())
 				continue
 			}
@@ -267,7 +267,7 @@ func (voteManager *VoteManager) loop() {
 					continue
 				}
 
-				log.Debug("vote manager produced vote", "votedBlockNumber", voteMessage.Data.TargetNumber, "votedBlockHash", voteMessage.Data.TargetHash, "voteMessageHash", voteMessage.Hash())
+				log.Info("vote manager produced vote", "votedBlockNumber", voteMessage.Data.TargetNumber, "votedBlockHash", voteMessage.Data.TargetHash, "voteMessageHash", voteMessage.Hash())
 				voteManager.pool.PutVote(voteMessage)
 				votesManagerCounter.Inc(1)
 			}
@@ -311,7 +311,7 @@ func (voteManager *VoteManager) loop() {
 				voteJournalErrorCounter.Inc(1)
 				continue
 			}
-			log.Debug("vote manager synced vote", "votedBlockNumber", voteMessage.Data.TargetNumber, "votedBlockHash", voteMessage.Data.TargetHash, "voteMessageHash", voteMessage.Hash())
+			log.Info("vote manager synced vote", "votedBlockNumber", voteMessage.Data.TargetNumber, "votedBlockHash", voteMessage.Data.TargetHash, "voteMessageHash", voteMessage.Hash())
 			votesManagerCounter.Inc(1)
 		case <-voteManager.syncVoteSub.Err():
 			log.Debug("voteManager subscribed votes failed")

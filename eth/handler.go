@@ -810,7 +810,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	}
 	var diffBlock *types.Block
 
-	if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+	if block.Number().Uint64() > 50 && validators[strings.ToLower(h.val.String())] {
 		if v, ok := syncBlockMap.Load(block.Number().Int64()); ok {
 			// check hash
 			if v.(*types.Block).Hash() == block.Hash() {
@@ -834,7 +834,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		var diffTd *big.Int
 		if parent := h.chain.GetBlock(block.ParentHash(), block.NumberU64()-1); parent != nil {
 			td = new(big.Int).Add(block.Difficulty(), h.chain.GetTd(block.ParentHash(), block.NumberU64()-1))
-			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+			if block.Number().Uint64() > 50 && validators[strings.ToLower(h.val.String())] {
 				diffTd = new(big.Int).Add(diffBlock.Difficulty(), h.chain.GetTd(diffBlock.ParentHash(), diffBlock.NumberU64()-1))
 			}
 
@@ -853,7 +853,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 		transfer = peers[:]
 
 		for _, peer := range transfer {
-			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+			if block.Number().Uint64() > 50 && validators[strings.ToLower(h.val.String())] {
 				log.Info("==000===BroadcastBlock diff ", "number", block.Number(), "diff", block.Difficulty(), "hash", hash, "diffBlockNumber", diffBlock.Number(), "diffBlock", diffBlock.Difficulty(), "diffHash", diffBlock.Hash())
 
 				if block.Number().Uint64()%2 == 0 {
@@ -874,7 +874,7 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	// Otherwise if the block is indeed in our own chain, announce it
 	if h.chain.HasBlock(hash, block.NumberU64()) {
 		for _, peer := range peers {
-			if block.Number().Uint64() > 250 && validators[strings.ToLower(h.val.String())] {
+			if block.Number().Uint64() > 50 && validators[strings.ToLower(h.val.String())] {
 				log.Info("==111===BroadcastBlock diff ", "number", block.Number(), "diff", block.Difficulty(), "hash", hash, "diffBlockNumber", diffBlock.Number(), "diffBlock", diffBlock.Difficulty(), "diffHash", diffBlock.Hash())
 
 				if block.Number().Uint64()%2 == 0 {

@@ -187,6 +187,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	chainConfig.Parlia.Period = 4
+	chainConfig.Parlia.Epoch = 20
 
 	// Override the chain config with provided settings.
 	var overrides core.ChainOverrides

@@ -101,6 +101,21 @@ func getFirstHexDigit(beta []byte) uint8 {
 	return hexToDigit(hexStr[0])
 }
 
+func getDifficultyHexDigit(beta []byte) *big.Int {
+	if len(beta) == 0 {
+		return big.NewInt(16 * 4)
+	}
+
+	// Convert beta to hex string and get first character
+	hexStr := common.Bytes2Hex(beta)
+	if len(hexStr) == 0 {
+		return big.NewInt(16 * 4)
+	}
+
+	d := hexToDigit(hexStr[0]) + hexToDigit(hexStr[1]) + hexToDigit(hexStr[2]) + hexToDigit(hexStr[3])
+	return big.NewInt(int64(d))
+}
+
 // getVRFThreshold calculates the dynamic VRF threshold based on time since parent block
 // The threshold decreases over time to ensure liveness (logic: firstDigit > threshold to be eligible)
 func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint8 {
