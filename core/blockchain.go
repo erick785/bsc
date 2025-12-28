@@ -1801,14 +1801,38 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		// Flush limits are not considered for the first TriesInMemory blocks.
 		current := block.NumberU64()
 		if current <= bc.TriesInMemory() {
+			log.Debug("⏩ Skipping flush (within TriesInMemory)",
+				"block", current,
+				"triesInMemory", bc.TriesInMemory(),
+				"remaining", bc.TriesInMemory()-current)
 			return nil
 		}
+
+		log.Info("✅ Passed TriesInMemory threshold",
+			"block", current,
+			"triesInMemory", bc.TriesInMemory(),
+			"chosen", current-bc.triesInMemory)
 		// If we exceeded our memory allowance, flush matured singleton nodes to disk
 		var (
 			_, nodes, _, imgs = triedb.Size()
 			limit             = common.StorageSize(bc.cacheConfig.TrieDirtyLimit) * 1024 * 1024
 		)
+
+		// 🔍 Monitor trie memory usage
+		log.Info("💾 Trie memory check",
+			"block", block.NumberU64(),
+			"nodes", common.StorageSize(nodes),
+			"imgs", common.StorageSize(imgs),
+			"limit", limit,
+			"exceedsLimit", nodes > limit || imgs > 4*1024*1024)
+
 		if nodes > limit || imgs > 4*1024*1024 {
+			log.Warn("⚠️ MEMORY EXCEEDED - Triggering Cap",
+				"block", block.NumberU64(),
+				"nodes", common.StorageSize(nodes),
+				"limit", limit,
+				"imgs", common.StorageSize(imgs),
+				"exceedBy", common.StorageSize(uint64(nodes)-uint64(limit)))
 			triedb.Cap(limit - ethdb.IdealBatchSize)
 		}
 		// Find the next state trie we need to commit
@@ -1834,8 +1858,26 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 					if chosen < bc.lastWrite+bc.triesInMemory && bc.gcproc >= 2*flushInterval {
 						log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/float64(bc.triesInMemory))
 					}
+
+					// 🔍 Monitor full trie commit
+					log.Warn("🔥 Triggering full trie commit",
+						"block", block.NumberU64(),
+						"chosen", chosen,
+						"gcproc", bc.gcproc,
+						"flushInterval", flushInterval,
+						"lastWrite", bc.lastWrite,
+						"root", header.Root.Hex()[:8])
+
+					commitStart := time.Now()
 					// Flush an entire trie and restart the counters
 					triedb.Commit(header.Root, true)
+					commitTime := time.Since(commitStart)
+
+					log.Warn("🔥 Full trie commit completed",
+						"block", block.NumberU64(),
+						"chosen", chosen,
+						"duration", commitTime)
+
 					rawdb.WriteSafePointBlockNumber(bc.db, chosen)
 					bc.lastWrite = chosen
 					bc.gcproc = 0
@@ -1844,19 +1886,55 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 		}
 		// Garbage collect anything below our required write retention
 		wg2 := sync.WaitGroup{}
+		gcCount := 0
+		gcStartTime := time.Now()
+
+		// 🔍 Monitor GC start
+		queueSize := bc.triegc.Size()
+		if queueSize > 0 {
+			log.Info("🗑️ Starting GC",
+				"block", block.NumberU64(),
+				"chosen", chosen,
+				"queueSize", queueSize)
+		}
+
 		for !bc.triegc.Empty() {
 			root, number := bc.triegc.Pop()
 			if uint64(-number) > chosen {
 				bc.triegc.Push(root, number)
 				break
 			}
+			gcCount++
 			wg2.Add(1)
-			go func() {
-				triedb.Dereference(root)
-				wg2.Done()
-			}()
+			go func(r common.Hash, n int64, idx int) {
+				defer wg2.Done()
+
+				// 🔍 Monitor individual Dereference
+				derefStart := time.Now()
+				triedb.Dereference(r)
+				derefTime := time.Since(derefStart)
+
+				if derefTime > 50*time.Millisecond {
+					log.Warn("⚠️ SLOW DEREFERENCE",
+						"gcIdx", idx,
+						"block", -n,
+						"root", r.Hex()[:8],
+						"time", derefTime)
+				}
+			}(root, number, gcCount)
 		}
 		wg2.Wait()
+
+		gcTotalTime := time.Since(gcStartTime)
+		if gcCount > 0 {
+			log.Info("🗑️ GC completed",
+				"block", block.NumberU64(),
+				"gcCount", gcCount,
+				"totalTime", gcTotalTime,
+				"avgTime", gcTotalTime/time.Duration(gcCount),
+				"queueRemaining", bc.triegc.Size())
+		}
+
 		return nil
 	}
 	// Commit all cached state changes into underlying memory database.
@@ -2027,6 +2105,19 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 	if len(chain) > 0 {
 		blockRecvTimeDiffGauge.Update(time.Now().Unix() - int64(chain[0].Time()))
 	}
+
+	// 🔍 Monitor batch insert start
+	batchStart := time.Now()
+	startNodes, startSize, _, _ := bc.triedb.Size()
+	if len(chain) > 0 {
+		log.Info("📦 Starting batch insert",
+			"blocks", len(chain),
+			"from", chain[0].NumberU64(),
+			"to", chain[len(chain)-1].NumberU64(),
+			"trieNodes", startNodes,
+			"trieSize", common.StorageSize(startSize))
+	}
+
 	// Start a parallel signature recovery (signer will fluke on fork transition, minimal perf loss)
 	signer := types.MakeSigner(bc.chainConfig, chain[0].Number(), chain[0].Time())
 	go SenderCacher.RecoverFromBlocks(signer, chain)
@@ -2035,6 +2126,23 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 		stats     = insertStats{startTime: mclock.Now()}
 		lastCanon *types.Block
 	)
+
+	// 🔍 Monitor batch completion
+	defer func() {
+		if len(chain) > 0 {
+			endNodes, endSize, _, _ := bc.triedb.Size()
+			batchTime := time.Since(batchStart)
+
+			log.Info("📦 Batch insert completed",
+				"duration", batchTime,
+				"blocks", len(chain),
+				"from", chain[0].NumberU64(),
+				"to", chain[len(chain)-1].NumberU64(),
+				"trieNodesBefore", startNodes,
+				"trieNodesAfter", endNodes,
+				"trieGrowth", common.StorageSize(uint64(endSize)-uint64(startSize)))
+		}
+	}()
 	// Fire a single chain head event if we've progressed the chain
 	defer func() {
 		if lastCanon != nil && bc.CurrentBlock().Hash() == lastCanon.Hash() {
