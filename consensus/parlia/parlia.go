@@ -276,7 +276,7 @@ func New(
 	if parliaConfig != nil {
 
 		parliaConfig.EnableVRF = true
-		parliaConfig.VRFActivationBlock = big.NewInt(10)
+		parliaConfig.VRFActivationBlock = big.NewInt(251)
 
 		if parliaConfig.VRFBaseThreshold == 0 {
 			parliaConfig.VRFBaseThreshold = 8 // Default: first hex digit < 8
@@ -1139,13 +1139,14 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 			vrfProof, err := generateVRFProof(p.privateKey, header.Number)
 			if err == nil {
 				// Set difficulty based on VRF beta first digit
-				firstDigit := getFirstHexDigit(vrfProof.Beta)
-				header.Difficulty = new(big.Int).SetUint64(uint64(firstDigit))
+
+				// Set difficulty based on VRF beta first digit
+				difficultyHexDigit := getDifficultyHexDigit(vrfProof.Beta)
+				header.Difficulty = difficultyHexDigit
 
 				log.Debug("VRF Prepare: set difficulty from beta",
 					"blockNumber", number,
 					"beta", common.Bytes2Hex(vrfProof.Beta),
-					"firstDigit", firstDigit,
 					"difficulty", header.Difficulty)
 			} else {
 				// Fallback to default if VRF generation fails

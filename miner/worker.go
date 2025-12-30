@@ -1405,7 +1405,9 @@ LOOP:
 
 	metrics.GetOrRegisterCounter(fmt.Sprintf("block/from/%v", from), nil).Inc(1)
 
-	w.commit(bestWork, w.fullTaskHook, true, start)
+	if err := w.commit(bestWork, w.fullTaskHook, true, start); err != nil {
+		log.Error("commit failed", "err", err)
+	}
 
 	// Swap out the old work with the new one, terminating any leftover
 	// prefetcher processes in the mean time and starting a new one.

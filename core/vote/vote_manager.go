@@ -52,9 +52,10 @@ type VoteManager struct {
 	journal *VoteJournal
 
 	engine consensus.PoSA
+	val    common.Address
 }
 
-func NewVoteManager(eth Backend, chain *core.BlockChain, pool *VotePool, journalPath, blsPasswordPath, blsWalletPath string, engine consensus.PoSA) (*VoteManager, error) {
+func NewVoteManager(val common.Address, eth Backend, chain *core.BlockChain, pool *VotePool, journalPath, blsPasswordPath, blsWalletPath string, engine consensus.PoSA) (*VoteManager, error) {
 	voteManager := &VoteManager{
 		eth:                    eth,
 		chain:                  chain,
@@ -62,6 +63,7 @@ func NewVoteManager(eth Backend, chain *core.BlockChain, pool *VotePool, journal
 		syncVoteCh:             make(chan core.NewVoteEvent, voteBufferForPut),
 		pool:                   pool,
 		engine:                 engine,
+		val:                    val,
 	}
 
 	// Create voteSigner.
@@ -127,10 +129,43 @@ func (voteManager *VoteManager) loop() {
 				startVote = true
 			}
 		case cHead := <-voteManager.highestVerifiedBlockCh:
-			if !startVote {
-				log.Debug("startVote flag is false, continue")
-				continue
+			_ = startVote
+			var timeUntilTarget time.Duration
+			if p, ok := voteManager.engine.(*parlia.Parlia); ok {
+				nextBlockMinedTime := time.Unix(int64((cHead.Header.Time + p.Period())), 0)
+				// 计算提前1.5秒的目标时间点
+				targetTime := nextBlockMinedTime.Add(-1500 * time.Millisecond)
+				// 计算从现在到目标时间点的时长
+				timeUntilTarget = targetTime.Sub(time.Now())
 			}
+
+			// Wait for 1.5s and collect potential better cHeads
+			timer := time.NewTimer(timeUntilTarget)
+			selectedCHead := cHead
+		waitLoop:
+			for {
+				select {
+				case newCHead := <-voteManager.highestVerifiedBlockCh:
+					// If block numbers are the same, compare hash values
+					if newCHead.Header.Number.Uint64() == selectedCHead.Header.Number.Uint64() {
+						selectedCHead = newCHead
+						log.Info("Selected new cHead with old hash", "blockNumber", newCHead.Header.Number.Uint64(), "newHash", newCHead.Header.Hash().Hex(), "oldHash", cHead.Header.Hash().Hex())
+					} else {
+						selectedCHead = newCHead
+						log.Info("Selected new cHead with different block number", "newBlockNumber", newCHead.Header.Number.Uint64(), "oldBlockNumber", cHead.Header.Number.Uint64())
+					}
+				case <-timer.C: // Timer expired, use the selected cHead
+					log.Info("Timer expired, processing selected cHead", "blockNumber", selectedCHead.Header.Number.Uint64(), "hash", selectedCHead.Header.Hash().Hex())
+					break waitLoop
+				}
+			}
+			// Now use selectedCHead for the rest of the processing
+			cHead = selectedCHead
+
+			// if !startVote {
+			// 	log.Debug("startVote flag is false, continue")
+			// 	continue
+			// }
 			if !voteManager.eth.IsMining() {
 				blockCountSinceMining = 0
 				log.Debug("skip voting because mining is disabled, continue")
