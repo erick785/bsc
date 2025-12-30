@@ -1024,7 +1024,12 @@ func (p *Parlia) assembleVoteAttestation(chain consensus.ChainHeaderReader, head
 	}
 	votes := p.VotePool.FetchVoteByBlockHash(parent.Hash())
 	if len(votes) < cmath.CeilDiv(len(snap.Validators)*2, 3) {
+		log.Info("Insufficient votes for attestation", "blockNumber", header.Number.Uint64(),
+			"parentHash", parent.Hash().Hex(), "votesCount", len(votes), "required", cmath.CeilDiv(len(snap.Validators)*2, 3), "validators", len(snap.Validators))
 		return nil
+	} else {
+		log.Info("Sufficient votes for attestation", "blockNumber", header.Number.Uint64(),
+			"parentHash", parent.Hash().Hex(), "votesCount", len(votes), "required", cmath.CeilDiv(len(snap.Validators)*2, 3), "validators", len(snap.Validators))
 	}
 
 	// Prepare vote attestation
