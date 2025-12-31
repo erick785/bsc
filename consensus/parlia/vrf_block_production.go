@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -139,6 +140,11 @@ func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint
 	degradeInterval := p.config.VRFDegradeInterval
 	if degradeInterval == 0 {
 		degradeInterval = p.config.Period
+	}
+
+	// Check environment variable to disable VRF threshold
+	if os.Getenv("DISABLE_VRF_THRESHOLD") == "true" {
+		return 0 // All validators eligible
 	}
 
 	return baseThreshold
