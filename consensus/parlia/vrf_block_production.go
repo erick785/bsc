@@ -143,7 +143,7 @@ func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint
 	}
 
 	// Check environment variable to disable VRF threshold
-	if os.Getenv("DISABLE_VRF_THRESHOLD") != "" {
+	if os.Getenv("DISABLE_VRF_THRESHOLD") == "true" {
 		return 0 // All validators eligible
 	}
 
