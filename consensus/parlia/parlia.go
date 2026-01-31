@@ -587,11 +587,6 @@ func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.H
 
 	receivedHeaders := header.GetHeaders()
 	if len(receivedHeaders) > 0 {
-		log.Info("Verifying headers received with block",
-			"blockNumber", header.Number,
-			"blockHash", header.Hash(),
-			"receivedHeadersCount", len(receivedHeaders))
-
 		// Verify headers continuity and validity
 		expectedNumber := header.Number.Uint64()
 		for i := len(receivedHeaders) - 1; i >= 0; i-- {
@@ -1205,7 +1200,7 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 				"blockNumber", number)
 		}
 
-		justifiedNumber, justifiedHash, err := p.GetJustifiedNumberAndHash(chain, []*types.Header{header})
+		justifiedNumber, justifiedHash, err := p.GetJustifiedNumberAndHash(chain, []*types.Header{parent})
 		if err != nil {
 			log.Error("Failed to get justified number and hash during Prepare",
 				"blockNumber", number, "err", err)
