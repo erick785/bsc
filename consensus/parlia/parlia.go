@@ -279,7 +279,7 @@ func New(
 		parliaConfig.VRFActivationBlock = big.NewInt(251)
 
 		if parliaConfig.VRFBaseThreshold == 0 {
-			parliaConfig.VRFBaseThreshold = 8 // Default: first hex digit < 8
+			parliaConfig.VRFBaseThreshold = 5 // Default: first hex digit < 5
 		}
 		if parliaConfig.VRFDegradeInterval == 0 {
 			parliaConfig.VRFDegradeInterval = parliaConfig.Period
@@ -583,6 +583,44 @@ func (p *Parlia) verifyVoteAttestation(chain consensus.ChainHeaderReader, header
 func (p *Parlia) verifyHeader(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
 	if header.Number == nil {
 		return errUnknownBlock
+	}
+
+	receivedHeaders := header.GetHeaders()
+	if len(receivedHeaders) > 0 {
+		log.Info("Verifying headers received with block",
+			"blockNumber", header.Number,
+			"blockHash", header.Hash(),
+			"receivedHeadersCount", len(receivedHeaders))
+
+		// Verify headers continuity and validity
+		expectedNumber := header.Number.Uint64()
+		for i := len(receivedHeaders) - 1; i >= 0; i-- {
+			expectedNumber--
+			h := receivedHeaders[i]
+			if h.Number.Uint64() != expectedNumber {
+				log.Error("Headers verification failed: discontinuous sequence",
+					"blockNumber", header.Number,
+					"expectedHeaderNumber", expectedNumber,
+					"actualHeaderNumber", h.Number.Uint64(),
+					"headerIndex", i)
+				return fmt.Errorf("discontinuous headers: expected %d, got %d", expectedNumber, h.Number.Uint64())
+			}
+
+			// Verify header hash matches the one in local chain if available
+			localHeader := chain.GetHeaderByHash(h.Hash())
+			if localHeader == nil {
+				log.Error("Headers verification: header not found in local chain",
+					"blockNumber", header.Number,
+					"headerHash", h.Hash(),
+					"receivedHash", h.Hash())
+				return fmt.Errorf("header not found in local chain: %s", h.Hash())
+			}
+		}
+
+		log.Info("Headers verification completed",
+			"blockNumber", header.Number,
+			"headersVerified", len(receivedHeaders),
+			"headersRange", fmt.Sprintf("[%d, %d)", receivedHeaders[0].Number.Uint64(), header.Number.Uint64()))
 	}
 
 	// Don't waste time checking blocks from the future
@@ -1166,6 +1204,33 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 			log.Debug("VRF Prepare: no private key, using default difficulty",
 				"blockNumber", number)
 		}
+
+		justifiedNumber, justifiedHash, err := p.GetJustifiedNumberAndHash(chain, []*types.Header{header})
+		if err != nil {
+			log.Error("Failed to get justified number and hash during Prepare",
+				"blockNumber", number, "err", err)
+			return err
+		}
+
+		headers := make([]*types.Header, 0)
+		for i := justifiedNumber; i < number; i++ {
+			h := chain.GetHeaderByNumber(i)
+			if h == nil {
+				log.Error("Failed to get header by number during Prepare",
+					"blockNumber", number, "missingHeader", i)
+				return fmt.Errorf("missing header at block %d", i)
+			}
+			headers = append(headers, h)
+		}
+
+		header.SetHeaders(headers)
+		log.Info("Prepared headers for block broadcast",
+			"blockNumber", number,
+			"justifiedNumber", justifiedNumber,
+			"justifiedHash", justifiedHash,
+			"headersCount", len(headers),
+			"headersRange", fmt.Sprintf("[%d, %d)", justifiedNumber, number))
+
 	} else {
 		header.Difficulty = p.CalcDifficulty(chain, header.Time, parent)
 	}

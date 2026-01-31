@@ -124,6 +124,16 @@ type Header struct {
 
 	// ParentBeaconRoot was added by EIP-4788 and is ignored in legacy headers.
 	ParentBeaconRoot *common.Hash `json:"parentBeaconBlockRoot" rlp:"optional"`
+
+	headers []*Header
+}
+
+func (h *Header) SetHeaders(headers []*Header) {
+	h.headers = headers
+}
+
+func (h *Header) GetHeaders() []*Header {
+	return h.headers
 }
 
 // field type overrides for gencodec
@@ -245,6 +255,13 @@ type Block struct {
 	sidecars BlobSidecars
 }
 
+func (b *Block) GetHeaders() []*Header {
+	return b.header.GetHeaders()
+}
+func (b *Block) SetHeaders(headers []*Header) {
+	b.header.SetHeaders(headers)
+}
+
 // "external" block encoding. used for eth protocol, etc.
 type extblock struct {
 	Header      *Header
@@ -346,6 +363,12 @@ func CopyHeader(h *Header) *Header {
 	if len(h.VRFProof) > 0 {
 		cpy.VRFProof = make([]byte, len(h.VRFProof))
 		copy(cpy.VRFProof, h.VRFProof)
+	}
+	if len(h.headers) > 0 {
+		cpy.headers = make([]*Header, len(h.headers))
+		for i := range h.headers {
+			cpy.headers[i] = CopyHeader(h.headers[i])
+		}
 	}
 	return &cpy
 }
