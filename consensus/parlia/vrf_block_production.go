@@ -130,10 +130,10 @@ func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint
 		return 0
 	}
 
-	// Get base threshold from config (default 8)
+	// Get base threshold from config (default 5)
 	baseThreshold := p.config.VRFBaseThreshold
 	if baseThreshold == 0 {
-		baseThreshold = 8
+		baseThreshold = 5
 	}
 
 	// Get degrade interval from config (default period)
@@ -147,18 +147,15 @@ func (p *Parlia) getVRFThreshold(blockNumber uint64, timeSinceParent int64) uint
 		return 0 // All validators eligible
 	}
 
-	return baseThreshold
-
-	// todo
 	// Calculate degraded threshold based on time
 	// Each degradeInterval seconds, decrease threshold to allow more validators
 	// Logic: firstDigit > threshold, so lower threshold = more validators eligible
 	if timeSinceParent <= int64(degradeInterval) {
-		return baseThreshold // Normal case: first digit > 8
+		return baseThreshold // Normal case: first digit > 5
 	} else if timeSinceParent <= int64(degradeInterval*2) {
-		return max(baseThreshold-2, 0) // first digit > 6
+		return max(baseThreshold-2, 0) // first digit > 3
 	} else if timeSinceParent <= int64(degradeInterval*3) {
-		return max(baseThreshold-4, 0) // first digit > 4
+		return max(baseThreshold-4, 0) // first digit > 1
 	} else {
 		return 0 // All validators eligible (any first digit > 0 works, so 1-f all eligible)
 	}

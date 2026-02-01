@@ -302,9 +302,6 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := snap.Validators[validator]; !ok {
-			return nil, errUnauthorizedValidator(validator.String())
-		}
 		if chainConfig.IsBohr(header.Number, header.Time) {
 			if snap.SignRecently(validator) {
 				log.Info("SignRecently1", "validator", validator, "number", number)
