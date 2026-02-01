@@ -178,6 +178,7 @@ func (voteManager *VoteManager) loop() {
 				log.Info("AttackValidator", "val", voteManager.val.String(), "blockNumber", cHead.Header.Number.Uint64())
 				continue
 			}
+
 			// if !startVote {
 			// 	log.Debug("startVote flag is false, continue")
 			// 	continue

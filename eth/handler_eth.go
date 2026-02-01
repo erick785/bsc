@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 )
 
@@ -127,6 +128,17 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, packet *eth.NewBlockPa
 	sidecars := packet.Sidecars
 	if sidecars != nil {
 		block = block.WithSidecars(sidecars)
+	}
+
+	// Set headers received from broadcast packet
+	if len(packet.Headers) > 0 {
+		block.SetHeaders(packet.Headers)
+		log.Info("Received block broadcast with headers",
+			"peer", peer.ID(),
+			"blockNumber", block.NumberU64(),
+			"blockHash", block.Hash(),
+			"headersCount", len(packet.Headers),
+			"headersRange", fmt.Sprintf("[%d, %d)", packet.Headers[0].Number.Uint64(), block.NumberU64()))
 	}
 
 	// Schedule the block for import
