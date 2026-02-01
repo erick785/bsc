@@ -304,14 +304,14 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		}
 		if chainConfig.IsBohr(header.Number, header.Time) {
 			if snap.SignRecently(validator) {
-				log.Info("SignRecently1", "validator", validator, "number", number)
+				//log.Info("SignRecently1", "validator", validator, "number", number)
 				//return nil, errRecentlySigned
 
 			}
 		} else {
 			for _, recent := range snap.Recents {
 				if recent == validator {
-					log.Info("SignRecently2", "validator", validator, "number", number)
+					//log.Info("SignRecently2", "validator", validator, "number", number)
 					//return nil, errRecentlySigned
 				}
 			}
