@@ -17,6 +17,7 @@
 package core
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -37,9 +38,41 @@ type insertStats struct {
 // always print out progress. This avoids the user wondering what's going on.
 const statsReportLimit = 8 * time.Second
 
+// logImportedCanonParentHeaders logs the last up to 5 canonical ancestors of the
+// imported tip (height, hash, difficulty, coinbase) for debugging; skipped at low heights.
+func logImportedCanonParentHeaders(bc *BlockChain, end *types.Block) {
+	if bc == nil || end.NumberU64() <= 400 {
+		return
+	}
+	h := end.Header()
+	fields := make([]interface{}, 0, 2+5*4)
+	fields = append(fields, "tipNumber", end.Number(), "tipHash", end.Hash())
+	for i := 1; i <= 5; i++ {
+		if h.Number == nil {
+			break
+		}
+		n := h.Number.Uint64()
+		if n == 0 {
+			break
+		}
+		parent := bc.GetHeader(h.ParentHash, n-1)
+		if parent == nil {
+			break
+		}
+		fields = append(fields,
+			fmt.Sprintf("parent%d_number", i), parent.Number,
+			//fmt.Sprintf("parent%d_hash", i), parent.Hash(),
+			fmt.Sprintf("parent%d_diff", i), parent.Difficulty,
+			fmt.Sprintf("parent%d_miner", i), parent.Coinbase,
+		)
+		h = parent
+	}
+	log.Info("Imported new chain segment: recent parent headers", fields...)
+}
+
 // report prints statistics if some number of blocks have been processed
 // or more than a few seconds have passed since the last message.
-func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, trieImmutableBufNodes common.StorageSize, setHead bool) {
+func (st *insertStats) report(bc *BlockChain, chain []*types.Block, index int, snapDiffItems, snapBufItems, trieDiffNodes, trieBufNodes, trieImmutableBufNodes common.StorageSize, setHead bool) {
 	// Fetch the timings for the batch
 	var (
 		now     = mclock.Now()
@@ -85,6 +118,7 @@ func (st *insertStats) report(chain []*types.Block, index int, snapDiffItems, sn
 		}
 		if setHead {
 			log.Info("Imported new chain segment", context...)
+			logImportedCanonParentHeaders(bc, end)
 		} else {
 			log.Info("Imported new potential chain segment", context...)
 		}

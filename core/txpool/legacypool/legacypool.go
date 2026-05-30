@@ -1066,6 +1066,7 @@ func (pool *LegacyPool) Add(txs []*types.Transaction, sync bool) []error {
 		}
 		// Accumulate all unknown transactions for deeper processing
 		news = append(news, tx)
+		log.Debug("Adding transaction to legacy pool", "hash", tx.Hash(), "to", tx.To())
 	}
 	if len(news) == 0 {
 		return errs
@@ -1423,6 +1424,9 @@ func (pool *LegacyPool) runReorg(done chan struct{}, reset *txpoolResetRequest, 
 	if len(events) > 0 {
 		var txs []*types.Transaction
 		for _, set := range events {
+			for _, tx := range set.Flatten() {
+				log.Info("Sending transaction to txFeed", "hash", tx.Hash(), "to", tx.To())
+			}
 			txs = append(txs, set.Flatten()...)
 		}
 		pool.txFeed.Send(core.NewTxsEvent{Txs: txs})

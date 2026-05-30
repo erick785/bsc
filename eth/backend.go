@@ -435,7 +435,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 
 	// Permit the downloader to use the trie cache allowance during fast sync
 	cacheLimit := options.TrieCleanLimit + options.TrieDirtyLimit + options.SnapshotLimit
-	if eth.handler, err = newHandler(&handlerConfig{
+	if eth.handler, err = newHandler(eth.etherbase, &handlerConfig{
 		NodeID:                    eth.p2pServer.Self().ID(),
 		Database:                  chainDb,
 		Chain:                     eth.blockchain,
@@ -630,7 +630,7 @@ func (s *Ethereum) waitForSyncAndMaxwell(parlia *parlia.Parlia) {
 				return
 			}
 			retryCount++
-			if retryCount > 3 {
+			if retryCount > 10 {
 				log.Error("Failed to update node ID exceed max retry count", "retryCount", retryCount, "err", err)
 				return
 			}

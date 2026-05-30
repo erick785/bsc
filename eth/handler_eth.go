@@ -146,7 +146,14 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, packet *eth.NewBlockPa
 	}
 
 	// Schedule the block for import
-	log.Debug("handleBlockBroadcast", "peer", peer.ID(), "block", block.Number(), "hash", block.Hash())
+	log.Debug("[Experiment] handleBlockBroadcast enqueue",
+		"peer", peer.ID(),
+		"number", block.NumberU64(), "hash", block.Hash(),
+		"parent", block.ParentHash(), "miner", block.Coinbase(),
+		"diff", block.Difficulty(), "td", td,
+		"localHead", h.chain.CurrentBlock().Number.Uint64(),
+		"haveParent", h.chain.HasBlock(block.ParentHash(), block.NumberU64()-1),
+	)
 	h.blockFetcher.Enqueue(peer.ID(), block)
 	stats := h.chain.GetBlockStats(block.Hash())
 	blockFirstReceived := false
@@ -170,10 +177,25 @@ func (h *ethHandler) handleBlockBroadcast(peer *eth.Peer, packet *eth.NewBlockPa
 		trueTD = td
 	}
 	// Update the peer's total difficulty if better than the previous
-	if _, td := peer.Head(); trueTD.Cmp(td) > 0 {
+	prevHead, prevTD := peer.Head()
+	willUpdate := trueTD.Cmp(prevTD) > 0
+	log.Debug("[Experiment] handleBlockBroadcast peer.SetHead decision",
+		"peer", peer.ID(),
+		"blockNumber", block.NumberU64(), "blockHash", block.Hash(),
+		"blockTD", td, "blockDiff", block.Difficulty(),
+		"trueHead", trueHead, "trueTD", trueTD,
+		"prevPeerHead", prevHead, "prevPeerTD", prevTD,
+		"willSetHead", willUpdate, "blockFirstReceived", blockFirstReceived,
+	)
+	if willUpdate {
 		peer.SetHead(trueHead, trueTD)
 		if blockFirstReceived {
+			log.Debug("[Experiment] handleBlockBroadcast triggering chainSync.handlePeerEvent",
+				"peer", peer.ID(), "newPeerHead", trueHead, "newPeerTD", trueTD)
 			h.chainSync.handlePeerEvent()
+		} else {
+			log.Debug("[Experiment] handleBlockBroadcast SetHead done but not first-recv, chainSync NOT poked",
+				"peer", peer.ID(), "newPeerHead", trueHead, "newPeerTD", trueTD)
 		}
 	}
 	return nil
