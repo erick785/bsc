@@ -476,7 +476,7 @@ func (f *BlockFetcher) loop() {
 				hash = op.block.Hash().String()
 			}
 
-			log.Info("Re-queue blocks", "number", number, "hash", hash)
+			log.Debug("Re-queue blocks", "number", number, "hash", hash)
 			f.enqueue(op.origin, op.header, op.block)
 
 		case op := <-f.inject:

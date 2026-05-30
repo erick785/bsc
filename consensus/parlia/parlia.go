@@ -55,14 +55,17 @@ const (
 
 	checkpointInterval = 1024 // Number of blocks after which to save the snapshot to the database
 
-	defaultEpochLength   uint64 = 200  // Default number of blocks of checkpoint to update validatorSet from contract
-	lorentzEpochLength   uint64 = 500  // Epoch length starting from the Lorentz hard fork
-	maxwellEpochLength   uint64 = 1000 // Epoch length starting from the Maxwell hard fork
+	defaultEpochLength uint64 = 200 // Default number of blocks of checkpoint to update validatorSet from contract
+	// lorentzEpochLength   uint64 = 500  // Epoch length starting from the Lorentz hard fork
+	// maxwellEpochLength   uint64 = 1000 // Epoch length starting from the Maxwell hard fork
+	lorentzEpochLength   uint64 = 200  // Epoch length starting from the Lorentz hard fork
+	maxwellEpochLength   uint64 = 200  // Epoch length starting from the Maxwell hard fork
 	defaultBlockInterval uint64 = 3000 // Default block interval in milliseconds
 	lorentzBlockInterval uint64 = 1500 // Block interval starting from the Lorentz hard fork
 	maxwellBlockInterval uint64 = 750  // Block interval starting from the Maxwell hard fork
-	fermiBlockInterval   uint64 = 450  // Block interval starting from the Fermi hard fork
-	defaultTurnLength    uint8  = 1    // Default consecutive number of blocks a validator receives priority for block production
+	//fermiBlockInterval   uint64 = 450  // Block interval starting from the Fermi hard fork
+	fermiBlockInterval uint64 = 1000 // Block interval starting from the Fermi hard fork
+	defaultTurnLength  uint8  = 1    // Default consecutive number of blocks a validator receives priority for block production
 
 	extraVanity      = 32 // Fixed number of extra-data prefix bytes reserved for signer vanity
 	extraSeal        = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
@@ -463,6 +466,11 @@ func trimParents(parents []*types.Header) []*types.Header {
 	return nil
 }
 
+// voteAttestationPartitionGroup maps a validator to experiment group "A"/"B" for logs; keep in sync with eth/downloader/partition.go.
+func voteAttestationPartitionGroup(addr common.Address) string {
+	return params.NetworkSplitValidatorGroup(addr)
+}
+
 // verifyVoteAttestation checks whether the vote attestation in the header is valid.
 func (p *Parlia) verifyVoteAttestation(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
 	// === Step 1: Extract attestation ===
@@ -770,6 +778,7 @@ func (p *Parlia) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 	for snap == nil {
 		// If an in-memory snapshot was found, use that
 		if s, ok := p.recentSnaps.Get(hash); ok {
+			log.Debug("Snapshot loaded from memory", "number", number, "hash", hash)
 			snap = s
 			break
 		}
@@ -1075,6 +1084,72 @@ func (p *Parlia) assembleVoteAttestation(chain consensus.ChainHeaderReader, head
 		}
 		votes = p.VotePool.FetchVotesByBlockHash(targetHeader.Hash(), justifiedBlockNumber)
 		quorum := cmath.CeilDiv(len(snap.Validators)*2, 3)
+		//if len(votes) < quorum {
+		voteAddrSet := make(map[types.BLSPublicKey]struct{}, len(votes))
+		for _, v := range votes {
+			voteAddrSet[v.VoteAddress] = struct{}{}
+		}
+
+		validators := snap.validators()
+		votedEntries := make([]string, 0, len(votes))
+		absentEntries := make([]string, 0, len(validators))
+		var votedA, votedB, votedU int
+		var absentA, absentB, absentU int
+		for i, val := range validators {
+			info, ok := snap.Validators[val]
+			if !ok {
+				continue
+			}
+			grp := voteAttestationPartitionGroup(val)
+			if grp == "" {
+				grp = "?"
+			}
+			entry := fmt.Sprintf("idx=%d addr=%s grp=%s", i, val.Hex(), grp)
+			if _, ok := voteAddrSet[info.VoteAddress]; ok {
+				votedEntries = append(votedEntries, entry)
+				switch grp {
+				case "A":
+					votedA++
+				case "B":
+					votedB++
+				default:
+					votedU++
+				}
+			} else {
+				absentEntries = append(absentEntries, entry)
+				switch grp {
+				case "A":
+					absentA++
+				case "B":
+					absentB++
+				default:
+					absentU++
+				}
+			}
+		}
+		if len(votes) < quorum {
+			log.Info("assembleVoteAttestation not enough votes: quorum not reached",
+				"block", header.Number.Uint64(), "hash", header.Hash(),
+				"justified", justifiedBlockNumber, "justifiedHash", justifiedBlockHash,
+				"target", targetHeader.Number.Uint64(), "targetHash", targetHeader.Hash(),
+				"votedCount", len(votes), "need", quorum, "totalValidators", len(validators),
+				"votedA", votedA, "votedB", votedB, "votedUnknown", votedU,
+				"absentA", absentA, "absentB", absentB, "absentUnknown", absentU,
+				"absent", strings.Join(absentEntries, "; "),
+			)
+		} else {
+			log.Info("assembleVoteAttestation enough votes: quorum reached",
+				"block", header.Number.Uint64(), "hash", header.Hash(),
+				"justified", justifiedBlockNumber, "justifiedHash", justifiedBlockHash,
+				"target", targetHeader.Number.Uint64(), "targetHash", targetHeader.Hash(),
+				"votedCount", len(votes), "need", quorum, "totalValidators", len(validators),
+				"votedA", votedA, "votedB", votedB, "votedUnknown", votedU,
+				"absentA", absentA, "absentB", absentB, "absentUnknown", absentU,
+				"absent", strings.Join(absentEntries, "; "),
+			)
+		}
+		//}
+
 		if len(votes) >= quorum {
 			targetHeaderParentSnap = snap
 			break
@@ -1480,7 +1555,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 	}
 
 	// update validators every day
-	if p.chainConfig.IsFeynman(header.Number, header.Time) && isBreatheBlock(parent.Time, header.Time) {
+	if p.chainConfig.IsFeynman(header.Number, header.Time) && (isBreatheBlock(parent.Time, header.Time) || header.Number.Uint64() == params.FirstUpdateValidatorSetHeight || header.Number.Uint64() == params.SecondUpdateValidatorSetHeight) {
 		// we should avoid update validators in the Feynman upgrade block
 		if !p.chainConfig.IsOnFeynman(header.Number, parent.Time, header.Time) {
 			if err := p.updateValidatorSetV2(state, header, cx, txs, receipts, systemTxs, usedGas, false, tracer); err != nil {
@@ -1568,7 +1643,7 @@ func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	}
 
 	// update validators every day
-	if p.chainConfig.IsFeynman(header.Number, header.Time) && isBreatheBlock(parent.Time, header.Time) {
+	if p.chainConfig.IsFeynman(header.Number, header.Time) && (isBreatheBlock(parent.Time, header.Time) || header.Number.Uint64() == params.FirstUpdateValidatorSetHeight || header.Number.Uint64() == params.SecondUpdateValidatorSetHeight) {
 		// we should avoid update validators in the Feynman upgrade block
 		if !p.chainConfig.IsOnFeynman(header.Number, parent.Time, header.Time) {
 			if err := p.updateValidatorSetV2(state, header, cx, &body.Transactions, &receipts, nil, &header.GasUsed, true, tracer); err != nil {

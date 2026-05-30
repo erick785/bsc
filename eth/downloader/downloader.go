@@ -119,7 +119,8 @@ type Downloader struct {
 	syncStatsChainHeight uint64       // Highest block number known when syncing started
 	syncStatsLock        sync.RWMutex // Lock protecting the sync stats fields
 
-	blockchain BlockChain
+	blockchain     BlockChain
+	localValidator common.Address // local validator address for network partition filtering
 
 	// Callbacks
 	dropPeer peerDropFn // Drops a peer for misbehaving
@@ -240,7 +241,7 @@ type BlockChain interface {
 type DownloadOption func(downloader *Downloader) *Downloader
 
 // New creates a new downloader to fetch hashes and blocks from remote peers.
-func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, dropPeer peerDropFn, _ func()) *Downloader {
+func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, dropPeer peerDropFn, _ func(), localValidator common.Address) *Downloader {
 	cutoffNumber, cutoffHash := chain.HistoryPruningCutoff()
 	dl := &Downloader{
 		stateDB:           stateDb,
@@ -257,7 +258,7 @@ func New(stateDb ethdb.Database, mux *event.TypeMux, chain BlockChain, dropPeer 
 		stateSyncStart:    make(chan *stateSync),
 		syncStartBlock:    chain.CurrentSnapBlock().Number.Uint64(),
 	}
-
+	dl.localValidator = localValidator
 	go dl.stateFetcher()
 	return dl
 }
@@ -1443,6 +1444,16 @@ func (d *Downloader) importBlockResults(results []*fetchResult) error {
 	for i, result := range results {
 		blocks[i] = types.NewBlockWithHeader(result.Header).WithBody(result.body()).WithSidecars(result.Sidecars)
 	}
+
+	currentNumber := d.blockchain.CurrentHeader().Number.Uint64()
+	if downloaderIsNetworkSplit(currentNumber) {
+		// Network partition: filter out blocks mined by cross-group validators.
+		blocks = downloaderFilterPartitionBlocks(d.localValidator, blocks, d.blockchain.HasBlock)
+		if len(blocks) == 0 {
+			return nil
+		}
+	}
+
 	// Downloaded blocks are always regarded as trusted after the
 	// transition. Because the downloaded chain is guided by the
 	// consensus-layer.

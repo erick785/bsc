@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -199,10 +200,11 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+	val            common.Address
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
-func newHandler(config *handlerConfig) (*handler, error) {
+func newHandler(val common.Address, config *handlerConfig) (*handler, error) {
 	// Create the protocol manager with the base fields
 	if config.EventMux == nil {
 		config.EventMux = new(event.TypeMux) // Nicety initialization for tests
@@ -276,7 +278,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 	// Construct the downloader (long sync)
-	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, h.removePeer, nil)
+	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, h.removePeer, nil, val)
 
 	// Construct the fetcher (short sync)
 	validator := func(header *types.Header) error {
@@ -311,6 +313,54 @@ func newHandler(config *handlerConfig) (*handler, error) {
 			log.Warn("Syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
 			return 0, nil
 		}
+
+		// Network partition: final gate – filter out blocks mined by cross-group validators.
+		// This catches blocks that arrive via chainSync/downloader or relayed through same-group peers.
+		myGroup, _ := getValidatorGroup(h.val)
+		if myGroup != "" {
+			filtered := blocks[:0]
+			for _, block := range blocks {
+				if !isNetworkSplit(block.NumberU64()) {
+					filtered = append(filtered, block)
+					continue
+				}
+				parentKnown := block.NumberU64() == 0 || h.chain.HasBlock(block.ParentHash(), block.NumberU64()-1)
+				if !parentKnown && len(filtered) > 0 {
+					parent := filtered[len(filtered)-1]
+					parentKnown = parent.Hash() == block.ParentHash() && parent.NumberU64()+1 == block.NumberU64()
+				}
+				if !parentKnown {
+					log.Info("[Partition] inserter: dropping block with unknown parent",
+						"number", block.NumberU64(),
+						"hash", block.Hash(),
+						"miner", block.Coinbase(),
+						"parent", block.ParentHash(),
+						"myGroup", myGroup,
+					)
+					continue
+				}
+				minerGroup, _ := getValidatorGroup(block.Coinbase())
+				if isCompatibleGroup(myGroup, minerGroup) {
+					filtered = append(filtered, block)
+				} else {
+					log.Info("[Partition] inserter: dropping cross-group block",
+						"number", block.NumberU64(),
+						"hash", block.Hash(),
+						"miner", block.Coinbase(),
+						"minerGroup", minerGroup,
+						"myGroup", myGroup,
+					)
+				}
+			}
+			if len(filtered) == 0 {
+				return 0, nil
+			}
+			blocks = filtered
+		} else {
+			log.Info("inserter: not in any group, inserting all blocks", "number", blocks[0].NumberU64(), "hash", blocks[0].Hash(), "val", h.val)
+			return 0, nil
+		}
+
 		return h.chain.InsertChain(blocks)
 	}
 
@@ -399,6 +449,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
 	h.chainSync = newChainSyncer(h)
+	h.val = val
 	return h, nil
 }
 
@@ -410,7 +461,7 @@ func (h *handler) protoTracker() {
 	if h.enableEVNFeatures && h.synced.Load() {
 		h.peers.enableEVNFeatures(h.queryValidatorNodeIDsMap(), h.evnNodeIdsWhitelistMap)
 	}
-	updateTicker := time.NewTicker(10 * time.Second)
+	updateTicker := time.NewTicker(1 * time.Second)
 	defer updateTicker.Stop()
 	var active int
 	for {
@@ -426,6 +477,8 @@ func (h *handler) protoTracker() {
 				// here check & enable peer broadcast features periodically, and it's a simple way to handle the peer change and the list change scenarios.
 				h.peers.enableEVNFeatures(h.queryValidatorNodeIDsMap(), h.evnNodeIdsWhitelistMap)
 			}
+			// Enforce network partition: disconnect cross-group peers during split window.
+			h.enforceNetworkPartition()
 		case <-h.quitSync:
 			// Wait for all active handlers to finish.
 			for ; active > 0; active-- {
@@ -805,6 +858,31 @@ func (h *handler) Stop() {
 	log.Info("Ethereum protocol stopped")
 }
 
+// isNetworkSplit returns true if the given block number is within the network partition window.
+func isNetworkSplit(blockNumber uint64) bool {
+	return blockNumber >= params.NetworkSplitStartHeight && blockNumber < params.NetworkSplitEndHeight
+}
+
+// getValidatorGroup returns "A", "B", "Common", or "" if the address is not in any group.
+func getValidatorGroup(addr common.Address) (string, string) {
+	return params.NetworkSplitValidatorGroupAndNodeID(addr)
+}
+
+func getValidatorGroupByNodeID(nodeID enode.ID) (string, string) {
+	return params.NetworkSplitNodeGroup(nodeID.String())
+}
+
+func isCompatibleGroup(a, b string) bool {
+	return params.NetworkSplitGroupsCompatible(a, b)
+}
+
+// isSameGroup returns true if both addresses belong to the same non-empty validator group.
+func isSameGroup(a, b common.Address) bool {
+	ga, _ := getValidatorGroup(a)
+	gb, _ := getValidatorGroup(b)
+	return isCompatibleGroup(ga, gb)
+}
+
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
 func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
@@ -943,11 +1021,68 @@ func (h *handler) queryValidatorNodeIDsMap() map[common.Address][]enode.ID {
 	return nodeIDsMap
 }
 
+// enforceNetworkPartition disconnects peers that belong to a different validator group
+// during the network-split window [networkSplitStartHeight, networkSplitEndHeight).
+// Once the chain passes networkSplitEndHeight the function is a no-op and normal
+// peer discovery will restore full connectivity.
+func (h *handler) enforceNetworkPartition() {
+	currentNumber := h.chain.CurrentHeader().Number.Uint64()
+	if !isNetworkSplit(currentNumber) {
+		return
+	}
+
+	myGroup, myNodeID := getValidatorGroup(h.val)
+	log.Debug("[Partition] enforceNetworkPartition triggered",
+		"height", currentNumber,
+		"myVal", h.val,
+		"myGroup", myGroup,
+		"myNodeID", myNodeID,
+	)
+	if myGroup == "" {
+		log.Debug("[Partition] enforceNetworkPartition: this node is not in any validator group, skip")
+		return
+	}
+
+	h.peers.lock.RLock()
+	peers := make([]*ethPeer, 0, len(h.peers.peers))
+	for _, p := range h.peers.peers {
+		peers = append(peers, p)
+	}
+	h.peers.lock.RUnlock()
+
+	log.Debug("[Partition] enforceNetworkPartition: checking peers",
+		"totalPeers", len(peers),
+		"myGroup", myGroup,
+		"height", currentNumber,
+	)
+
+	for _, peer := range peers {
+		peerNodeID := peer.NodeID()
+
+		peerGroup, _ := getValidatorGroupByNodeID(peerNodeID)
+		if !isCompatibleGroup(myGroup, peerGroup) {
+			log.Debug("[Partition] enforceNetworkPartition: DISCONNECTING cross-group peer",
+				"peer", peer.ID()[:8],
+				"peerNodeID", peerNodeID,
+				"myGroup", myGroup,
+				"peerGroup", peerGroup,
+				"height", currentNumber,
+			)
+			h.removePeer(peer.ID())
+		}
+	}
+}
+
 // BroadcastTransactions will propagate a batch of transactions
 // - To a square root of all peers for non-blob transactions
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
 func (h *handler) BroadcastTransactions(txs types.Transactions) {
+	currentNumber := h.chain.CurrentHeader().Number.Uint64()
+	if !isNetworkSplit(currentNumber) {
+		return
+	}
+
 	var (
 		blobTxs  int // Number of blob transactions to announce only
 		largeTxs int // Number of large transactions to announce only
@@ -1104,6 +1239,11 @@ func (h *handler) txBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.txsCh:
+			if len(event.Txs) > 0 {
+				for _, tx := range event.Txs {
+					log.Info("Received transaction in txBroadcastLoop", "hash", tx.Hash(), "to", tx.To())
+				}
+			}
 			h.BroadcastTransactions(event.Txs)
 		case <-h.txsSub.Err():
 			return

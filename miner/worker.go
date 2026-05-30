@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -910,7 +911,7 @@ LOOP:
 		default:
 			// Transaction is regarded as invalid, drop all consecutive transactions from
 			// the same sender because of `nonce-too-high` clause.
-			log.Debug("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
+			log.Info("Transaction failed, account skipped", "hash", ltx.Hash, "err", err)
 			txs.Pop()
 		}
 	}
@@ -1061,6 +1062,35 @@ func (w *worker) fillTransactions(interruptCh chan int32, env *environment, stop
 	blobTxsStart := time.Now()
 	pendingBlobTxs := w.eth.TxPool().Pending(filter)
 	pendingBlobTxsTimer.UpdateSince(blobTxsStart)
+
+	blockNum := env.header.Number.Uint64()
+	filterNetworkSplitSenders := func(m map[common.Address][]*txpool.LazyTransaction) {
+		for addr := range m {
+			sender := strings.ToLower(addr.Hex())
+			if blockNum < params.NetworkSplitStartHeight {
+				if _, ok := params.ValidatorsAddA[sender]; ok {
+					delete(m, addr)
+					continue
+				}
+				if _, ok := params.ValidatorsAddB[sender]; ok {
+					delete(m, addr)
+					continue
+				}
+			}
+			if !params.NetworkSplitPendingSenderAllowed(env.coinbase, addr, blockNum) {
+				delete(m, addr)
+			}
+		}
+	}
+	filterNetworkSplitSenders(pendingPlainTxs)
+	filterNetworkSplitSenders(pendingBlobTxs)
+
+	// print tx hash
+	for addr, txs := range pendingPlainTxs {
+		for _, tx := range txs {
+			log.Info("Pending plain tx after network split filter", "hash", tx.Hash, "sender", addr)
+		}
+	}
 
 	if bidTxs != nil {
 		filterBidTxs := func(commonTxs map[common.Address][]*txpool.LazyTransaction) {
