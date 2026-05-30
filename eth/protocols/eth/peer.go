@@ -339,8 +339,17 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 	case p.queuedBlocks <- &blockPropagation{block: block, td: td}:
 		// Mark all the block hash as known, but ensure we don't overflow our limits
 		p.knownBlocks.Add(block.Hash())
+		log.Debug("[Experiment] queued block propagation",
+			"number", block.NumberU64(), "hash", block.Hash(),
+			"miner", block.Coinbase(), "peer", p.ID(),
+			"qlen", len(p.queuedBlocks), "qcap", cap(p.queuedBlocks),
+		)
 	default:
-		p.Log().Debug("Dropping block propagation", "number", block.NumberU64(), "hash", block.Hash())
+		log.Warn("[Experiment] DROPPED block propagation (queue full)",
+			"number", block.NumberU64(), "hash", block.Hash(),
+			"miner", block.Coinbase(), "peer", p.ID(),
+			"qlen", len(p.queuedBlocks), "qcap", cap(p.queuedBlocks),
+		)
 	}
 }
 

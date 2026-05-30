@@ -113,6 +113,29 @@ func (p *Parlia) updateValidatorSetV2(state vm.StateDB, header *types.Header, ch
 	// 2. sort by voting power
 	eValidators, eVotingPowers, eVoteAddrs := getTopValidatorsByVotingPower(validatorItems, maxElectedValidators)
 
+	// log validator set changes compared to current snapshot
+	if cc, ok := chain.(chainContext); ok {
+		if snap, snapErr := p.snapshot(cc.Chain, header.Number.Uint64()-1, header.ParentHash, nil); snapErr != nil {
+			log.Warn("Failed to get snapshot for validator change logging", "error", snapErr)
+		} else {
+			newValSet := make(map[common.Address]struct{}, len(eValidators))
+			for _, v := range eValidators {
+				newValSet[v] = struct{}{}
+			}
+			for addr := range snap.Validators {
+				if _, ok := newValSet[addr]; !ok {
+					log.Info("Validator removed from contract", "block", header.Number, "validator", addr, "validators", len(eValidators))
+
+				}
+			}
+			for _, addr := range eValidators {
+				if _, ok := snap.Validators[addr]; !ok {
+					//log.Info("Validator added to contract", "block", header.Number, "validator", addr)
+				}
+			}
+		}
+	}
+	log.Info("[ValidatorElection] Validator set changes", "block", header.Number, "candidates", len(eValidators), "eValidators", eValidators, "eVotingPowers", eVotingPowers)
 	// 3. update validator set to system contract
 	method := "updateValidatorSetV2"
 	data, err := p.validatorSetABI.Pack(method, eValidators, eVotingPowers, eVoteAddrs)

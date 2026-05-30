@@ -373,8 +373,16 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 	// Retrieve and decode the propagated block
 	ann := new(NewBlockPacket)
 	if err := msg.Decode(ann); err != nil {
+		log.Warn("[Experiment] handleNewBlock decode failed", "peer", peer.ID(), "err", err)
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+
+	log.Debug("[Experiment] handleNewBlock received",
+		"number", ann.Block.NumberU64(), "hash", ann.Block.Hash(),
+		"parent", ann.Block.ParentHash(), "miner", ann.Block.Coinbase(),
+		"diff", ann.Block.Difficulty(), "td", ann.TD, "peer", peer.ID(),
+		"txNum", len(ann.Block.Transactions()),
+	)
 
 	if ann.Bal != nil {
 		log.Debug("handleNewBlock, BAL", "number", ann.Block.NumberU64(), "hash", ann.Block.Hash(), "peer", peer.ID(),
@@ -385,6 +393,8 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 	}
 	// Now that we have our packet, perform operations using the interface methods
 	if err := ann.sanityCheck(); err != nil {
+		log.Warn("[Experiment] handleNewBlock sanity check failed",
+			"number", ann.Block.NumberU64(), "hash", ann.Block.Hash(), "peer", peer.ID(), "err", err)
 		return err
 	}
 
@@ -402,7 +412,14 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 	// Mark the peer as owning the block
 	peer.markBlock(ann.Block.Hash())
 
-	return backend.Handle(peer, ann)
+	if err := backend.Handle(peer, ann); err != nil {
+		log.Warn("[Experiment] handleNewBlock backend.Handle failed",
+			"number", ann.Block.NumberU64(), "hash", ann.Block.Hash(), "peer", peer.ID(), "err", err)
+		return err
+	}
+	log.Debug("[Experiment] handleNewBlock delivered to backend",
+		"number", ann.Block.NumberU64(), "hash", ann.Block.Hash(), "peer", peer.ID())
+	return nil
 }
 
 func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {

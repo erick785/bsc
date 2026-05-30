@@ -224,6 +224,11 @@ func (s *Snapshot) updateAttestation(header *types.Header, chainConfig *params.C
 	voteCount := bitset.From([]uint64{uint64(attestation.VoteAddressSet)}).Count()
 	attestationVoteCountGauge.Update(int64(voteCount))
 
+	var prevFinalized uint64
+	if s.Attestation != nil {
+		prevFinalized = s.Attestation.SourceNumber
+	}
+
 	// Update attestation
 	// Two scenarios for s.Attestation being nil:
 	// 1) The first attestation is assembled.
@@ -233,6 +238,17 @@ func (s *Snapshot) updateAttestation(header *types.Header, chainConfig *params.C
 		s.Attestation.TargetHash = attestation.Data.TargetHash
 	} else {
 		s.Attestation = attestation.Data
+	}
+
+	if s.Attestation != nil && s.Attestation.SourceNumber != prevFinalized {
+		log.Info("Parlia finalized block number changed",
+			"header", header.Number.Uint64(),
+			"prevFinalized", prevFinalized,
+			"newFinalized", s.Attestation.SourceNumber,
+			"targetNumber", s.Attestation.TargetNumber,
+			"sourceHash", s.Attestation.SourceHash,
+			"targetHash", s.Attestation.TargetHash,
+		)
 	}
 }
 
@@ -372,6 +388,8 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 		}
 		// change validator set
 		if number > 0 && number%epochLength == snap.minerHistoryCheckLen() {
+			log.Info("Validator set may change at next block", "number", number, "hash", header.Hash(), "epochLength", epochLength,
+				"minerHistoryCheckLen", snap.minerHistoryCheckLen(), "turnLength", snap.TurnLength)
 			epochKey := math.MaxUint64 - header.Number.Uint64()/epochLength // impossible used as a block number
 			if chainConfig.IsBohr(header.Number, header.Time) {
 				// after switching the validator set, snap.Validators may become larger,
@@ -394,7 +412,7 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 			}
 			if turnLength != nil {
 				snap.TurnLength = *turnLength
-				log.Debug("validator set switch", "turnLength", *turnLength)
+				log.Info("validator set switch", "turnLength", *turnLength)
 			}
 
 			// get validators from headers and use that for new validator set
@@ -404,7 +422,7 @@ func (s *Snapshot) apply(headers []*types.Header, chain consensus.ChainHeaderRea
 			}
 			newVals := make(map[common.Address]*ValidatorInfo, len(newValArr))
 			for idx, val := range newValArr {
-				if !chainConfig.IsLuban(header.Number) {
+				if !chainConfig.IsLuban(header.Number) || len(voteAddrs) != len(newValArr) {
 					newVals[val] = &ValidatorInfo{}
 				} else {
 					newVals[val] = &ValidatorInfo{
