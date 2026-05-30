@@ -390,7 +390,7 @@ func (ps *peerSet) enableEVNFeatures(validatorNodeIDsMap map[common.Address][]en
 	}
 	evnWhiteListPeerGuage.Update(whiteListPeerCnt)
 	evnOnchainValidatorPeerGuage.Update(onchainValidatorPeerCnt)
-	log.Info("enable EVN features", "total", len(peers), "whiteListPeerCnt", whiteListPeerCnt, "onchainValidatorPeerCnt", onchainValidatorPeerCnt)
+	log.Debug("enable EVN features", "total", len(peers), "whiteListPeerCnt", whiteListPeerCnt, "onchainValidatorPeerCnt", onchainValidatorPeerCnt)
 }
 
 // isProxyedValidator checks if the received block from the proxyed validator.
