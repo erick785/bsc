@@ -49,6 +49,7 @@ import (
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/enode"
+	"github.com/ethereum/go-ethereum/params"
 )
 
 const (
@@ -199,10 +200,11 @@ type handler struct {
 
 	handlerStartCh chan struct{}
 	handlerDoneCh  chan struct{}
+	val            common.Address
 }
 
 // newHandler returns a handler for all Ethereum chain management protocol.
-func newHandler(config *handlerConfig) (*handler, error) {
+func newHandler(val common.Address, config *handlerConfig) (*handler, error) {
 	// Create the protocol manager with the base fields
 	if config.EventMux == nil {
 		config.EventMux = new(event.TypeMux) // Nicety initialization for tests
@@ -276,7 +278,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return nil, errors.New("snap sync not supported with snapshots disabled")
 	}
 	// Construct the downloader (long sync)
-	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, h.removePeer, nil)
+	h.downloader = downloader.New(config.Database, h.eventMux, h.chain, h.removePeer, nil, val)
 
 	// Construct the fetcher (short sync)
 	validator := func(header *types.Header) error {
@@ -302,16 +304,59 @@ func newHandler(config *handlerConfig) (*handler, error) {
 		return fblock.Number.Uint64()
 	}
 	inserter := func(blocks types.Blocks) (int, error) {
+		first := blocks[0]
+		last := blocks[len(blocks)-1]
+		log.Debug("[Experiment] fetcher inserter invoked",
+			"count", len(blocks),
+			"firstNum", first.NumberU64(), "firstHash", first.Hash(), "firstMiner", first.Coinbase(),
+			"lastNum", last.NumberU64(), "lastHash", last.Hash(), "lastMiner", last.Coinbase(),
+			"localHead", h.chain.CurrentBlock().Number.Uint64(),
+		)
 		// If snap sync is running, deny importing weird blocks. This is a problematic
 		// clause when starting up a new network, because snap-syncing miners might not
 		// accept each others' blocks until a restart. Unfortunately we haven't figured
 		// out a way yet where nodes can decide unilaterally whether the network is new
 		// or not. This should be fixed if we figure out a solution.
 		if !h.synced.Load() {
-			log.Warn("Syncing, discarded propagated block", "number", blocks[0].Number(), "hash", blocks[0].Hash())
+			log.Warn("[Experiment] inserter: not synced, discarding propagated block",
+				"number", blocks[0].Number(), "hash", blocks[0].Hash())
 			return 0, nil
 		}
-		return h.chain.InsertChain(blocks)
+
+		// // Network partition: final gate – filter out blocks mined by cross-group validators.
+		// // This catches blocks that arrive via chainSync/downloader or relayed through same-group peers.
+		// myGroup, _ := getValidatorGroup(h.chain.CurrentHeader().Number.Uint64(), h.val)
+
+		// filtered := blocks[:0]
+		// for _, block := range blocks {
+		// 	if !isNetworkSplit(block.NumberU64()) {
+		// 		filtered = append(filtered, block)
+		// 		continue
+		// 	}
+		// 	minerGroup, _ := getValidatorGroup(block.NumberU64(), block.Coinbase())
+		// 	if minerGroup == myGroup {
+		// 		filtered = append(filtered, block)
+		// 	} else {
+		// 		log.Info("[Partition] inserter: dropping cross-group block",
+		// 			"number", block.NumberU64(),
+		// 			"hash", block.Hash(),
+		// 			"miner", block.Coinbase(),
+		// 			"minerGroup", minerGroup,
+		// 			"myGroup", myGroup,
+		// 		)
+		// 	}
+		// 	if len(filtered) == 0 {
+		// 		return 0, nil
+		// 	}
+		// 	blocks = filtered
+		// }
+
+		n, err := h.chain.InsertChain(blocks)
+		log.Debug("[Experiment] inserter InsertChain returned",
+			"requested", len(blocks), "inserted", n, "err", err,
+			"localHeadAfter", h.chain.CurrentBlock().Number.Uint64(),
+		)
+		return n, err
 	}
 
 	broadcastBlockWithCheck := func(block *types.Block, propagate bool) {
@@ -399,6 +444,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	}
 	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
 	h.chainSync = newChainSyncer(h)
+	h.val = val
 	return h, nil
 }
 
@@ -410,7 +456,7 @@ func (h *handler) protoTracker() {
 	if h.enableEVNFeatures && h.synced.Load() {
 		h.peers.enableEVNFeatures(h.queryValidatorNodeIDsMap(), h.evnNodeIdsWhitelistMap)
 	}
-	updateTicker := time.NewTicker(10 * time.Second)
+	updateTicker := time.NewTicker(1 * time.Second)
 	defer updateTicker.Stop()
 	var active int
 	for {
@@ -426,6 +472,8 @@ func (h *handler) protoTracker() {
 				// here check & enable peer broadcast features periodically, and it's a simple way to handle the peer change and the list change scenarios.
 				h.peers.enableEVNFeatures(h.queryValidatorNodeIDsMap(), h.evnNodeIdsWhitelistMap)
 			}
+			// Enforce network partition: disconnect cross-group peers during split window.
+			//h.enforceNetworkPartition()
 		case <-h.quitSync:
 			// Wait for all active handlers to finish.
 			for ; active > 0; active-- {
@@ -760,6 +808,42 @@ func (h *handler) Start(maxPeers int, maxPeersPerIP int) {
 	// start peer handler tracker
 	h.wg.Add(1)
 	go h.protoTracker()
+
+	// Wake the block fetcher whenever the local chain head advances. Without
+	// this, blocks queued in the fetcher whose parents are filled in by the
+	// downloader (rather than by the fetcher itself) can sit in the queue
+	// indefinitely, because the fetcher's loop only wakes up on its own
+	// internal events. See BlockFetcher.NotifyChainHead for details.
+	h.wg.Add(1)
+	go h.fetcherWakeupLoop()
+}
+
+// fetcherWakeupLoop subscribes to local ChainHeadEvent and pokes the block
+// fetcher every time the chain head moves. The signal is non-blocking and
+// coalescing on the fetcher side, so a short burst of head updates only
+// triggers a single re-scan.
+func (h *handler) fetcherWakeupLoop() {
+	defer h.wg.Done()
+
+	headCh := make(chan core.ChainHeadEvent, chainHeadChanSize)
+	headSub := h.chain.SubscribeChainHeadEvent(headCh)
+	defer headSub.Unsubscribe()
+
+	for {
+		select {
+		case ev := <-headCh:
+			if ev.Header != nil {
+				log.Debug("[Experiment] fetcherWakeupLoop chain head advanced",
+					"number", ev.Header.Number.Uint64(),
+					"hash", ev.Header.Hash().Hex())
+			}
+			h.blockFetcher.NotifyChainHead()
+		case <-headSub.Err():
+			return
+		case <-h.stopCh:
+			return
+		}
+	}
 }
 
 func (h *handler) startMaliciousVoteMonitor() {
@@ -805,6 +889,87 @@ func (h *handler) Stop() {
 	log.Info("Ethereum protocol stopped")
 }
 
+// isNetworkSplit returns true if the given block number is within the network partition window.
+func isNetworkSplit(blockNumber uint64) bool {
+	return blockNumber >= params.NetworkSplitStartHeight && blockNumber < params.NetworkSplitEndHeight
+}
+
+// experimentPeerValidatorAddr returns the validator address of a peer if its enode ID is
+// listed in params.AllValidators. Returns (zero, false) for non-validator peers.
+func experimentPeerValidatorAddr(p *ethPeer) (common.Address, bool) {
+	id := p.NodeID()
+	for addrHex, nodeHex := range params.AllValidators {
+		pid, err := enode.ParseID(nodeHex)
+		if err != nil {
+			continue
+		}
+		if pid == id {
+			return common.HexToAddress(addrHex), true
+		}
+	}
+	return common.Address{}, false
+}
+
+// filterBroadcastPeersByNetworkSplit implements the point-to-point broadcast routing of the
+// experiment. For each block whose height is in [NetworkSplitStartHeight, NetworkSplitEndHeight),
+// the (height, coinbase) pair is looked up in params.ExperimentBroadcastTargets:
+//
+//   - Not scheduled:     drop the broadcast entirely (skip=true).
+//   - Scheduled, no targets: drop the broadcast (e.g. 405/405' – locally retained only).
+//   - Scheduled with targets: keep only peers whose validator address is listed.
+//
+// Outside the experiment window the default peer set is returned unchanged.
+func (h *handler) filterBroadcastPeersByNetworkSplit(block *types.Block, peers []*ethPeer) ([]*ethPeer, bool) {
+	n := block.NumberU64()
+	if !isNetworkSplit(n) {
+		return peers, false
+	}
+
+	targets, inWindow := params.ExperimentBroadcastTargets(n, block.Coinbase())
+	if !inWindow {
+		return peers, false
+	}
+	if len(targets) == 0 {
+		log.Debug("[Experiment] skip broadcast (no targets)",
+			"number", n, "hash", block.Hash(), "miner", block.Coinbase())
+		return nil, true
+	}
+
+	targetSet := make(map[common.Address]struct{}, len(targets))
+	for _, a := range targets {
+		targetSet[a] = struct{}{}
+	}
+
+	out := make([]*ethPeer, 0, len(peers))
+	matched := make([]string, 0, len(peers))
+	for _, p := range peers {
+		addr, ok := experimentPeerValidatorAddr(p)
+		if !ok {
+			continue
+		}
+		if _, hit := targetSet[addr]; hit {
+			out = append(out, p)
+			matched = append(matched, fmt.Sprintf("%s=%s", addr.Hex(), p.ID()))
+		}
+	}
+	// Surface the candidate peer pool too: if peers=0 here we want to know whether
+	// the experiment target is just not connected, or its `knownBlocks` already has
+	// the hash (i.e. this is the second-pass announce broadcast which is normal).
+	candidate := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if addr, ok := experimentPeerValidatorAddr(p); ok {
+			candidate = append(candidate, fmt.Sprintf("%s=%s", addr.Hex(), p.ID()))
+		} else {
+			candidate = append(candidate, fmt.Sprintf("?=%s", p.ID()))
+		}
+	}
+	log.Debug("[Experiment] routed block",
+		"number", n, "hash", block.Hash(), "miner", block.Coinbase(),
+		"targets", targets, "matchedPeers", matched, "candidatePeers", candidate,
+		"sendTo", len(out))
+	return out, false
+}
+
 // BroadcastBlock will either propagate a block to a subset of its peers, or
 // will only announce its availability (depending what's requested).
 func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
@@ -816,6 +981,13 @@ func (h *handler) BroadcastBlock(block *types.Block, propagate bool) {
 	}
 	hash := block.Hash()
 	peers := h.peers.peersWithoutBlock(hash)
+	peers, skip := h.filterBroadcastPeersByNetworkSplit(block, peers)
+	if skip {
+		return
+	}
+	if len(peers) == 0 {
+		return
+	}
 
 	// If propagation is requested, send to a subset of the peer
 	if propagate {
@@ -943,11 +1115,68 @@ func (h *handler) queryValidatorNodeIDsMap() map[common.Address][]enode.ID {
 	return nodeIDsMap
 }
 
+// enforceNetworkPartition disconnects peers that belong to a different validator group
+// during the network-split window [networkSplitStartHeight, networkSplitEndHeight).
+// Once the chain passes networkSplitEndHeight the function is a no-op and normal
+// peer discovery will restore full connectivity.
+// func (h *handler) enforceNetworkPartition() {
+// 	currentNumber := h.chain.CurrentHeader().Number.Uint64()
+// 	if !isNetworkSplit(currentNumber) {
+// 		return
+// 	}
+
+// 	myGroup, myNodeID := getValidatorGroup(currentNumber, h.val)
+// 	log.Debug("[Partition] enforceNetworkPartition triggered",
+// 		"height", currentNumber,
+// 		"myVal", h.val,
+// 		"myGroup", myGroup,
+// 		"myNodeID", myNodeID,
+// 	)
+// 	if myGroup == "" {
+// 		log.Debug("[Partition] enforceNetworkPartition: this node is not in any validator group, skip")
+// 		return
+// 	}
+
+// 	h.peers.lock.RLock()
+// 	peers := make([]*ethPeer, 0, len(h.peers.peers))
+// 	for _, p := range h.peers.peers {
+// 		peers = append(peers, p)
+// 	}
+// 	h.peers.lock.RUnlock()
+
+// 	log.Debug("[Partition] enforceNetworkPartition: checking peers",
+// 		"totalPeers", len(peers),
+// 		"myGroup", myGroup,
+// 		"height", currentNumber,
+// 	)
+
+// 	for _, peer := range peers {
+// 		peerNodeID := peer.NodeID()
+
+// 		peerGroup, _ := getValidatorGroupByNodeID(currentNumber, peerNodeID)
+// 		if peerGroup != myGroup {
+// 			log.Debug("[Partition] enforceNetworkPartition: DISCONNECTING cross-group peer",
+// 				"peer", peer.ID()[:8],
+// 				"peerNodeID", peerNodeID,
+// 				"myGroup", myGroup,
+// 				"peerGroup", peerGroup,
+// 				"height", currentNumber,
+// 			)
+// 			h.removePeer(peer.ID())
+// 		}
+// 	}
+// }
+
 // BroadcastTransactions will propagate a batch of transactions
 // - To a square root of all peers for non-blob transactions
 // - And, separately, as announcements to all peers which are not known to
 // already have the given transaction.
 func (h *handler) BroadcastTransactions(txs types.Transactions) {
+	currentNumber := h.chain.CurrentHeader().Number.Uint64()
+	if !isNetworkSplit(currentNumber) {
+		return
+	}
+
 	var (
 		blobTxs  int // Number of blob transactions to announce only
 		largeTxs int // Number of large transactions to announce only
@@ -1090,7 +1319,7 @@ func (h *handler) minedBroadcastLoop() {
 			if ev, ok := obj.Data.(core.NewSealedBlockEvent); ok {
 				h.BroadcastBlock(ev.Block, true) // Propagate block to peers
 			} else if ev, ok := obj.Data.(core.NewMinedBlockEvent); ok {
-				h.BroadcastBlock(ev.Block, false) // Only then announce to the rest
+				h.BroadcastBlock(ev.Block, true) // Only then announce to the rest
 			}
 		case <-h.stopCh:
 			return
@@ -1104,6 +1333,11 @@ func (h *handler) txBroadcastLoop() {
 	for {
 		select {
 		case event := <-h.txsCh:
+			if len(event.Txs) > 0 {
+				for _, tx := range event.Txs {
+					log.Debug("Received transaction in txBroadcastLoop", "hash", tx.Hash(), "to", tx.To())
+				}
+			}
 			h.BroadcastTransactions(event.Txs)
 		case <-h.txsSub.Err():
 			return

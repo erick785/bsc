@@ -55,14 +55,17 @@ const (
 
 	checkpointInterval = 1024 // Number of blocks after which to save the snapshot to the database
 
-	defaultEpochLength   uint64 = 200  // Default number of blocks of checkpoint to update validatorSet from contract
-	lorentzEpochLength   uint64 = 500  // Epoch length starting from the Lorentz hard fork
-	maxwellEpochLength   uint64 = 1000 // Epoch length starting from the Maxwell hard fork
+	defaultEpochLength uint64 = 200 // Default number of blocks of checkpoint to update validatorSet from contract
+	// lorentzEpochLength   uint64 = 500  // Epoch length starting from the Lorentz hard fork
+	// maxwellEpochLength   uint64 = 1000 // Epoch length starting from the Maxwell hard fork
+	lorentzEpochLength   uint64 = 200  // Epoch length starting from the Lorentz hard fork
+	maxwellEpochLength   uint64 = 200  // Epoch length starting from the Maxwell hard fork
 	defaultBlockInterval uint64 = 3000 // Default block interval in milliseconds
 	lorentzBlockInterval uint64 = 1500 // Block interval starting from the Lorentz hard fork
 	maxwellBlockInterval uint64 = 750  // Block interval starting from the Maxwell hard fork
-	fermiBlockInterval   uint64 = 450  // Block interval starting from the Fermi hard fork
-	defaultTurnLength    uint8  = 1    // Default consecutive number of blocks a validator receives priority for block production
+	//fermiBlockInterval   uint64 = 450  // Block interval starting from the Fermi hard fork
+	fermiBlockInterval uint64 = 1000 // Block interval starting from the Fermi hard fork
+	defaultTurnLength  uint8  = 1    // Default consecutive number of blocks a validator receives priority for block production
 
 	extraVanity      = 32 // Fixed number of extra-data prefix bytes reserved for signer vanity
 	extraSeal        = 65 // Fixed number of extra-data suffix bytes reserved for signer seal
@@ -463,6 +466,18 @@ func trimParents(parents []*types.Header) []*types.Header {
 	return nil
 }
 
+// voteAttestationPartitionGroup maps a validator to experiment group "A"/"B" for logs; keep in sync with eth/downloader/partition.go.
+func voteAttestationPartitionGroup(addr common.Address) string {
+	// h := strings.ToLower(addr.Hex())
+	// if _, ok := params.ValidatorsA[h]; ok {
+	// 	return "A"
+	// }
+	// if _, ok := params.ValidatorsB[h]; ok {
+	// 	return "B"
+	// }
+	return ""
+}
+
 // verifyVoteAttestation checks whether the vote attestation in the header is valid.
 func (p *Parlia) verifyVoteAttestation(chain consensus.ChainHeaderReader, header *types.Header, parents []*types.Header) error {
 	// === Step 1: Extract attestation ===
@@ -770,6 +785,7 @@ func (p *Parlia) snapshot(chain consensus.ChainHeaderReader, number uint64, hash
 	for snap == nil {
 		// If an in-memory snapshot was found, use that
 		if s, ok := p.recentSnaps.Get(hash); ok {
+			log.Trace("Snapshot loaded from memory", "number", number, "hash", hash)
 			snap = s
 			break
 		}
@@ -1075,6 +1091,72 @@ func (p *Parlia) assembleVoteAttestation(chain consensus.ChainHeaderReader, head
 		}
 		votes = p.VotePool.FetchVotesByBlockHash(targetHeader.Hash(), justifiedBlockNumber)
 		quorum := cmath.CeilDiv(len(snap.Validators)*2, 3)
+		//if len(votes) < quorum {
+		voteAddrSet := make(map[types.BLSPublicKey]struct{}, len(votes))
+		for _, v := range votes {
+			voteAddrSet[v.VoteAddress] = struct{}{}
+		}
+
+		validators := snap.validators()
+		votedEntries := make([]string, 0, len(votes))
+		absentEntries := make([]string, 0, len(validators))
+		var votedA, votedB, votedU int
+		var absentA, absentB, absentU int
+		for i, val := range validators {
+			info, ok := snap.Validators[val]
+			if !ok {
+				continue
+			}
+			grp := voteAttestationPartitionGroup(val)
+			if grp == "" {
+				grp = "?"
+			}
+			entry := fmt.Sprintf("idx=%d addr=%s grp=%s", i, val.Hex(), grp)
+			if _, ok := voteAddrSet[info.VoteAddress]; ok {
+				votedEntries = append(votedEntries, entry)
+				switch grp {
+				case "A":
+					votedA++
+				case "B":
+					votedB++
+				default:
+					votedU++
+				}
+			} else {
+				absentEntries = append(absentEntries, entry)
+				switch grp {
+				case "A":
+					absentA++
+				case "B":
+					absentB++
+				default:
+					absentU++
+				}
+			}
+		}
+		if len(votes) < quorum {
+			log.Info("assembleVoteAttestation not enough votes: quorum not reached",
+				"block", header.Number.Uint64(), "hash", header.Hash(),
+				"justified", justifiedBlockNumber, "justifiedHash", justifiedBlockHash,
+				"target", targetHeader.Number.Uint64(), "targetHash", targetHeader.Hash(),
+				"votedCount", len(votes), "need", quorum, "totalValidators", len(validators),
+				"votedA", votedA, "votedB", votedB, "votedUnknown", votedU,
+				"absentA", absentA, "absentB", absentB, "absentUnknown", absentU,
+				"absent", strings.Join(absentEntries, "; "),
+			)
+		} else {
+			log.Info("assembleVoteAttestation enough votes: quorum reached",
+				"block", header.Number.Uint64(), "hash", header.Hash(),
+				"justified", justifiedBlockNumber, "justifiedHash", justifiedBlockHash,
+				"target", targetHeader.Number.Uint64(), "targetHash", targetHeader.Hash(),
+				"votedCount", len(votes), "need", quorum, "totalValidators", len(validators),
+				"votedA", votedA, "votedB", votedB, "votedUnknown", votedU,
+				"absentA", absentA, "absentB", absentB, "absentUnknown", absentU,
+				"absent", strings.Join(absentEntries, "; "),
+			)
+		}
+		//}
+
 		if len(votes) >= quorum {
 			targetHeaderParentSnap = snap
 			break
@@ -1178,6 +1260,10 @@ func (p *Parlia) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 	parent := chain.GetHeader(header.ParentHash, number-1)
 	if parent == nil {
 		return consensus.ErrUnknownAncestor
+	}
+	for _, validator := range snap.validators() {
+		delay := p.backOffTime(snap, parent, header, validator)
+		log.Debug("validator backOffTime", "blockNumber", number, "validator", validator, "delay", delay)
 	}
 	blockTime := p.blockTimeForRamanujanFork(snap, header, parent)
 	header.Time = blockTime / 1000 // get seconds
@@ -1480,7 +1566,7 @@ func (p *Parlia) Finalize(chain consensus.ChainHeaderReader, header *types.Heade
 	}
 
 	// update validators every day
-	if p.chainConfig.IsFeynman(header.Number, header.Time) && isBreatheBlock(parent.Time, header.Time) {
+	if p.chainConfig.IsFeynman(header.Number, header.Time) && (isBreatheBlock(parent.Time, header.Time) || header.Number.Uint64() == params.FirstUpdateValidatorSetHeight || header.Number.Uint64() == params.SecondUpdateValidatorSetHeight) {
 		// we should avoid update validators in the Feynman upgrade block
 		if !p.chainConfig.IsOnFeynman(header.Number, parent.Time, header.Time) {
 			if err := p.updateValidatorSetV2(state, header, cx, txs, receipts, systemTxs, usedGas, false, tracer); err != nil {
@@ -1568,7 +1654,7 @@ func (p *Parlia) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *
 	}
 
 	// update validators every day
-	if p.chainConfig.IsFeynman(header.Number, header.Time) && isBreatheBlock(parent.Time, header.Time) {
+	if p.chainConfig.IsFeynman(header.Number, header.Time) && (isBreatheBlock(parent.Time, header.Time) || header.Number.Uint64() == params.FirstUpdateValidatorSetHeight || header.Number.Uint64() == params.SecondUpdateValidatorSetHeight) {
 		// we should avoid update validators in the Feynman upgrade block
 		if !p.chainConfig.IsOnFeynman(header.Number, parent.Time, header.Time) {
 			if err := p.updateValidatorSetV2(state, header, cx, &body.Transactions, &receipts, nil, &header.GasUsed, true, tracer); err != nil {
@@ -1699,6 +1785,45 @@ func (p *Parlia) Delay(chain consensus.ChainReader, header *types.Header, leftOv
 	return &delay
 }
 
+// logSealAncestors walks back up to `depth` headers from `header.ParentHash` and
+// logs (number, difficulty, miner) for each – useful for tracing which branch a
+// miner is sealing on, especially around experimental reorgs.
+func logSealAncestors(chain consensus.ChainHeaderReader, header *types.Header, depth int) {
+	type row struct {
+		Number     uint64
+		Difficulty string
+		Miner      string
+		Hash       string
+	}
+	rows := make([]row, 0, depth)
+	hash := header.ParentHash
+	num := header.Number.Uint64()
+	for i := 0; i < depth && num > 0; i++ {
+		num--
+		h := chain.GetHeader(hash, num)
+		if h == nil {
+			break
+		}
+		diff := "nil"
+		if h.Difficulty != nil {
+			diff = h.Difficulty.String()
+		}
+		rows = append(rows, row{
+			Number:     h.Number.Uint64(),
+			Difficulty: diff,
+			Miner:      h.Coinbase.Hex(),
+			Hash:       h.Hash().Hex(),
+		})
+		hash = h.ParentHash
+	}
+	log.Info("[SealAncestors] seal context",
+		"sealingNumber", header.Number.Uint64(),
+		"sealingParentHash", header.ParentHash.Hex(),
+		"depth", len(rows),
+		"ancestors", rows,
+	)
+}
+
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
 func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
@@ -1713,6 +1838,15 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	p.lock.RLock()
 	val, signFn := p.val, p.signFn
 	p.lock.RUnlock()
+
+	// Experiment trace: log every Seal invocation (after genesis check), so we can
+	// tell when the local miner is trying to mine a height that should have been
+	// imported from a peer instead.
+	log.Debug("[Experiment] Seal invoked",
+		"number", number, "parent", header.ParentHash.Hex(),
+		"headerDiff", header.Difficulty, "val", val.Hex(),
+		"localHead", chain.CurrentHeader().Number.Uint64(),
+		"localHeadHash", chain.CurrentHeader().Hash().Hex())
 
 	snap, err := p.snapshot(chain, number-1, header.ParentHash, nil)
 	if err != nil {
@@ -1730,10 +1864,24 @@ func (p *Parlia) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 		return nil
 	}
 
+	// Experiment gate: during the scripted partition only the scheduled miners for
+	// this height are allowed to seal. All other validators silently skip sealing,
+	// which causes the miner to re-schedule and try again later. After 415 the
+	// schedule is empty so both chains freeze by design.
+	if !params.CanMineExperimentBlock(number, val) {
+		log.Debug("[Experiment] not scheduled to seal this height, skip",
+			"number", number, "val", val.Hex())
+		return nil
+	}
+
 	// Sweet, the protocol permits us to sign the block, wait for our time
 	delay := p.delayForRamanujanFork(snap, header)
 
 	log.Info("Sealing block with", "number", number, "delay", delay, "headerDifficulty", header.Difficulty, "val", val.Hex())
+
+	// Experiment aid: dump the last up-to-5 ancestor headers so we can visually
+	// follow which branch this seal is sitting on (especially useful around reorgs).
+	logSealAncestors(chain, header, 20)
 
 	// Wait until sealing is terminated or delay timeout.
 	log.Trace("Waiting for slot to sign and propagate", "delay", common.PrettyDuration(delay))
@@ -2300,7 +2448,7 @@ func (p *Parlia) GetFinalizedHeader(chain consensus.ChainHeaderReader, header *t
 // ===========================     utility function        ==========================
 func (p *Parlia) backOffTime(snap *Snapshot, parent, header *types.Header, val common.Address) uint64 {
 	if snap.inturn(val) {
-		log.Debug("backOffTime", "blockNumber", header.Number, "in turn validator", val)
+		//log.Info("backOffTime", "blockNumber", header.Number, "in turn validator", val)
 		return 0
 	} else {
 		delay := defaultInitialBackOffTime

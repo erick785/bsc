@@ -187,6 +187,15 @@ type BlockFetcher struct {
 
 	requeue chan *blockOrHeaderInject
 
+	// wakeup is a non-blocking signal that asks the loop to re-scan its pending
+	// queue. It is used by external consumers (e.g. the eth handler that listens
+	// to ChainHeadEvent) to nudge the fetcher when the local chain advances by
+	// means other than the fetcher itself (typically the downloader importing a
+	// chain segment). Without this, queued blocks whose parents have just been
+	// installed by the downloader would sit in the queue forever, because the
+	// fetcher loop only wakes up on its own internal events.
+	wakeup chan struct{}
+
 	// Announce states
 	announces  map[string]int                   // Per peer blockAnnounce counts to prevent memory exhaustion
 	announced  map[common.Hash][]*blockAnnounce // Announced blocks, scheduled for fetching
@@ -230,6 +239,7 @@ func NewBlockFetcher(getBlock blockRetrievalFn, verifyHeader headerVerifierFn, b
 		done:                 make(chan common.Hash),
 		quit:                 make(chan struct{}),
 		requeue:              make(chan *blockOrHeaderInject),
+		wakeup:               make(chan struct{}, 1),
 		announces:            make(map[string]int),
 		announced:            make(map[common.Hash][]*blockAnnounce),
 		fetching:             make(map[common.Hash]*blockAnnounce),
@@ -287,11 +297,31 @@ func (f *BlockFetcher) Enqueue(peer string, block *types.Block) error {
 		origin: peer,
 		block:  block,
 	}
+	log.Debug("[Experiment] fetcher.Enqueue called",
+		"peer", peer, "number", block.NumberU64(), "hash", block.Hash(),
+		"parent", block.ParentHash(), "miner", block.Coinbase())
 	select {
 	case f.inject <- op:
+		log.Debug("[Experiment] fetcher.Enqueue delivered to inject channel",
+			"peer", peer, "number", block.NumberU64(), "hash", block.Hash())
 		return nil
 	case <-f.quit:
+		log.Warn("[Experiment] fetcher.Enqueue aborted (fetcher quit)",
+			"peer", peer, "number", block.NumberU64(), "hash", block.Hash())
 		return errTerminated
+	}
+}
+
+// NotifyChainHead nudges the fetcher loop to re-scan its pending import queue.
+// It is intended to be called whenever the local chain head advances through
+// channels other than the fetcher itself (e.g. the downloader importing a chain
+// segment), so that queued blocks waiting for their parents can be promoted to
+// import as soon as the parents become available. The signal is non-blocking
+// and coalescing: extra wakeups while one is already pending are dropped.
+func (f *BlockFetcher) NotifyChainHead() {
+	select {
+	case f.wakeup <- struct{}{}:
+	default:
 	}
 }
 
@@ -388,6 +418,10 @@ func (f *BlockFetcher) loop() {
 		}
 		// Import any queued blocks that could potentially fit
 		height := f.chainHeight()
+		if !f.queue.Empty() {
+			log.Debug("[Experiment] fetcher loop scan queue start",
+				"queueSize", f.queue.Size(), "chainHeight", height)
+		}
 		for !f.queue.Empty() {
 			op := f.queue.PopItem()
 			hash := op.hash()
@@ -401,14 +435,22 @@ func (f *BlockFetcher) loop() {
 				if f.queueChangeHook != nil {
 					f.queueChangeHook(hash, true)
 				}
+				log.Debug("[Experiment] fetcher queue item too high, push back",
+					"number", number, "hash", hash, "chainHeight", height)
 				break
 			}
 			// Otherwise if fresh and still unknown, try and import
 			finalizedHeight := f.chainFinalizedHeight()
 			if (number+maxUncleDist < height) || number <= finalizedHeight || f.getBlock(hash) != nil {
+				log.Debug("[Experiment] fetcher queue item dropped",
+					"number", number, "hash", hash,
+					"chainHeight", height, "finalized", finalizedHeight,
+					"alreadyHave", f.getBlock(hash) != nil)
 				f.forgetBlock(hash)
 				continue
 			}
+			log.Debug("[Experiment] fetcher queue item importing",
+				"number", number, "hash", hash, "chainHeight", height)
 			f.importBlocks(op)
 		}
 		// Wait for an outside event to occur
@@ -483,6 +525,14 @@ func (f *BlockFetcher) loop() {
 			// A direct block insertion was requested, try and fill any pending gaps
 			blockBroadcastInMeter.Mark(1)
 			f.enqueue(op.origin, nil, op.block)
+
+		case <-f.wakeup:
+			// External signal (typically a ChainHeadEvent triggered by the
+			// downloader installing a chain segment) telling us to re-scan the
+			// queue. The work itself happens at the top of the outer for loop;
+			// we only need to fall through.
+			log.Debug("[Experiment] fetcher loop wakeup",
+				"queueSize", f.queue.Size(), "chainHeight", f.chainHeight())
 
 		case hash := <-f.done:
 			// A pending import finished, remove all traces of the notification
@@ -889,12 +939,14 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 	hash := block.Hash()
 
 	// Run the import on a new thread
-	log.Debug("Importing propagated block", "peer", peer, "number", block.Number(), "hash", hash, "balSize", block.BALSize())
+	log.Debug("[Experiment] fetcher importBlocks start",
+		"peer", peer, "number", block.Number(), "hash", hash, "parent", block.ParentHash())
 	go func() {
 		// If the parent's unknown, abort insertion
 		parent := f.getBlock(block.ParentHash())
 		if parent == nil {
-			log.Debug("Unknown parent of propagated block", "peer", peer, "number", block.Number(), "hash", hash, "parent", block.ParentHash())
+			log.Warn("[Experiment] fetcher importBlocks unknown parent, will requeue",
+				"peer", peer, "number", block.Number(), "hash", hash, "parent", block.ParentHash())
 			// forget block first, then re-queue
 			f.done <- hash
 			time.Sleep(reQueueBlockTimeout)
@@ -930,9 +982,12 @@ func (f *BlockFetcher) importBlocks(op *blockOrHeaderInject) {
 				blockInsertFailRecords.Add(block.Hash())
 				blockInsertFailGauge.Update(int64(blockInsertFailRecords.Cardinality()))
 			}
-			log.Debug("Propagated block import failed", "peer", peer, "number", block.Number(), "hash", hash, "err", err)
+			log.Warn("[Experiment] fetcher importBlocks insertChain failed",
+				"peer", peer, "number", block.Number(), "hash", hash, "err", err)
 			return
 		}
+		log.Debug("[Experiment] fetcher importBlocks insertChain ok",
+			"peer", peer, "number", block.Number(), "hash", hash)
 		// If import succeeded, broadcast the block
 		blockAnnounceOutTimer.UpdateSince(block.ReceivedAt)
 		go f.broadcastBlock(block, false)

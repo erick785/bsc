@@ -89,8 +89,10 @@ func newChainSyncer(handler *handler) *chainSyncer {
 func (cs *chainSyncer) handlePeerEvent() bool {
 	select {
 	case cs.peerEventCh <- struct{}{}:
+		log.Debug("[Experiment] chainSync.handlePeerEvent delivered")
 		return true
 	case <-cs.handler.quitSync:
+		log.Warn("[Experiment] chainSync.handlePeerEvent aborted (quitSync)")
 		return false
 	}
 }
@@ -141,6 +143,7 @@ func (cs *chainSyncer) loop() {
 // nextSyncOp determines whether sync is required at this time.
 func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	if cs.doneCh != nil {
+		log.Debug("[Experiment] chainSync.nextSyncOp skip: sync already running")
 		return nil // Sync already running
 	}
 	// Ensure we're at minimum peer count.
@@ -151,6 +154,8 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		minPeers = cs.handler.maxPeers
 	}
 	if cs.handler.peers.len() < minPeers {
+		log.Debug("[Experiment] chainSync.nextSyncOp skip: not enough peers",
+			"have", cs.handler.peers.len(), "need", minPeers)
 		return nil
 	}
 	// We have enough peers, pick the one with the highest TD, but avoid going
@@ -158,11 +163,17 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	// clients to direct the chain head to sync to.
 	peer := cs.handler.peers.peerWithHighestTD()
 	if peer == nil {
+		log.Debug("[Experiment] chainSync.nextSyncOp skip: no peer with highest TD")
 		return nil
 	}
 	mode, ourTD := cs.modeAndLocalHead()
 	op := peerToSyncOp(mode, peer)
+	log.Debug("[Experiment] chainSync.nextSyncOp picked peer",
+		"peer", peer.ID(), "peerHead", op.head, "peerTD", op.td,
+		"ourTD", ourTD, "mode", mode)
 	if op.td.Cmp(ourTD) <= 0 {
+		log.Debug("[Experiment] chainSync.nextSyncOp NO sync: peer not ahead",
+			"peerTD", op.td, "ourTD", ourTD)
 		if !cs.handler.acceptTxs.Load() {
 			// Occurs only during a quick restart.
 			cs.handler.acceptTxs.Store(true)
@@ -197,6 +208,8 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 		}
 	}
 
+	log.Debug("[Experiment] chainSync.nextSyncOp WILL sync",
+		"peer", op.peer.ID(), "peerHead", op.head, "peerTD", op.td)
 	return op
 }
 
