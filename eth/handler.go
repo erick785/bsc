@@ -1130,6 +1130,8 @@ func (h *handler) voteBroadcastLoop() {
 func (h *handler) enableSyncedFeatures() {
 	// Mark the local node as synced.
 	h.synced.Store(true)
+	head := h.chain.CurrentBlock()
+	log.Info("[DL-ATTACK-EXP] synced_changed", "old", false, "new", true, "head", head.Number)
 	if !h.acceptTxs.Load() {
 		h.acceptTxs.Store(true)
 		log.Info("Enable transaction acceptance when synced.")

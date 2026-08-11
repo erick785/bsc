@@ -60,7 +60,7 @@ func (p *Peer) handshake68(networkID uint64, chain forkid.Blockchain, td *big.In
 		pkt := &StatusPacket68{
 			ProtocolVersion: uint32(p.version),
 			NetworkID:       networkID,
-			TD:              td,
+			TD:              downloaderExperimentAdvertisedTD(p, networkID, td),
 			Head:            latest.Hash(),
 			Genesis:         genesis.Hash(),
 			ForkID:          forkID,

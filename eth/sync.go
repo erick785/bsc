@@ -162,6 +162,8 @@ func (cs *chainSyncer) nextSyncOp() *chainSyncOp {
 	}
 	mode, ourTD := cs.modeAndLocalHead()
 	op := peerToSyncOp(mode, peer)
+	peerHead, peerTD := peer.Head()
+	log.Info("[DL-ATTACK-EXP] sync_candidate", "peer", peer.ID(), "head", peerHead, "td", peerTD, "localTD", ourTD, "synced", cs.handler.acceptTxs.Load())
 	if op.td.Cmp(ourTD) <= 0 {
 		if !cs.handler.acceptTxs.Load() {
 			// Occurs only during a quick restart.
@@ -244,8 +246,11 @@ func (cs *chainSyncer) startSync(op *chainSyncOp) {
 
 // doSync synchronizes the local blockchain with a remote peer.
 func (h *handler) doSync(op *chainSyncOp) error {
+	syncStart := time.Now()
+	log.Info("[DL-ATTACK-EXP] sync_start", "peer", op.peer.ID(), "mode", op.mode, "head", op.head, "td", op.td, "synced", h.acceptTxs.Load())
 	// Run the sync cycle, and disable snap sync if we're past the pivot block
 	err := h.downloader.LegacySync(op.peer.ID(), op.head, op.peer.Name(), op.td, h.chain.Config().TerminalTotalDifficulty, op.mode)
+	log.Info("[DL-ATTACK-EXP] sync_end", "peer", op.peer.ID(), "elapsed", time.Since(syncStart), "err", err, "synced", h.acceptTxs.Load())
 	if err != nil {
 		return err
 	}
