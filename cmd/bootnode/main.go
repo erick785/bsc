@@ -129,11 +129,16 @@ func main() {
 			listenerAddr = natAddr
 		}
 	}
-	ethEntry, err := discover.GetEthEntry(*networkFilter)
-	if err != nil {
-		utils.Fatalf("-network: %v", err)
+	// A local research network can have a custom genesis/fork ID which does
+	// not match the public BSC or Chapel presets. When no network filter is
+	// requested, leave the ENR unfiltered so those nodes can use this bootnode.
+	if *networkFilter != "" {
+		ethEntry, err := discover.GetEthEntry(*networkFilter)
+		if err != nil {
+			utils.Fatalf("-network: %v", err)
+		}
+		ln.Set(ethEntry)
 	}
-	ln.Set(ethEntry)
 	printNotice(&nodeKey.PublicKey, *listenerAddr)
 	cfg := discover.Config{
 		PrivateKey:     nodeKey,
